@@ -4,7 +4,7 @@ import java.util.Scanner;
 
 import static enumeration.test.ex1.AuthGrade.*;
 
-public class AutoGradeMain2 {
+public class AuthGradeMain2 {
 	public static void main(String[] args) {
 		Scanner scanner = new Scanner(System.in);
 		System.out.print("等級を入力してください。[GUEST, LOGIN，ADMIN]: ");
