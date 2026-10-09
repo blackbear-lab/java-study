@@ -1,30 +1,30 @@
-package exception.ex3;
+package exception.ex4;
 
 
-import exception.ex3.exception.ConnectExceptionV3;
-import exception.ex3.exception.SendExceptionV3;
+import exception.ex4.exception.ConnectExceptionV4;
+import exception.ex4.exception.SendExceptionV4;
 
-public class NetworkClientV3 {
+public class NetworkClientV5 implements AutoCloseable {
 	private final String address;
 	public boolean connectError;
 	public boolean sendError;
 
-	public NetworkClientV3(String address) {
+	public NetworkClientV5(String address) {
 		this.address = address;
 	}
 
-	public void connect() throws ConnectExceptionV3 {
+	public void connect() {
 		if (connectError) {
-			throw new ConnectExceptionV3(address, address + " サーバーアクセス失敗");
+			throw new ConnectExceptionV4(address, address + " サーバーアクセス失敗");
 		}
 		//アクセス成功
 		System.out.println(address + "サーバーアクセス成功");
 	}
 
-	public void send(String data) throws SendExceptionV3 {
+	public void send(String data)  {
 		if (sendError) {
-			//throw new SendExceptionV3(data, address + "サーバーへデータ転送失敗: " + data);
-			throw new RuntimeException("ex");
+			throw new SendExceptionV4(data, address + "サーバーへデータ転送失敗: " + data);
+			//throw new RuntimeException("ex");
 		}
 		//転送成功
 		System.out.println(address + "サーバーへデータ転送： " + data);
@@ -41,5 +41,11 @@ public class NetworkClientV3 {
 		if (data.contains("error2")) {
 			sendError = true;
 		}
+	}
+
+	@Override
+	public void close() {
+		System.out.println("NetworkClientV5.close");
+		disconnect();
 	}
 }
