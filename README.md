@@ -11,6 +11,6 @@ Javaバックエンド開発を目指し、Javaの基礎知識や重要な概念
 
 1. [Java 入門](./01-java-intro)
 2. [Java 基本](./02-java-basic)
-3. [Java 中級](./03-java-intermediate)
+3. [Java 中級](03-java-intermediate1)
 
 学習を進めながら、各テーマのサンプルコードや学習内容を追加していきます。
