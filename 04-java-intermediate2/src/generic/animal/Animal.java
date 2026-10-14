@@ -14,6 +14,10 @@ public class Animal {
 		return name;
 	}
 
+	public int getSize() {
+		return size;
+	}
+
 	public void sound() {
 		System.out.println("動物の鳴き声");
 	}
