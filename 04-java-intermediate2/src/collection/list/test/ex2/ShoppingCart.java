@@ -1,11 +1,12 @@
 package collection.list.test.ex2;
 
 import java.util.ArrayList;
+import java.util.List;
 
 public class ShoppingCart {
 
 	private int totalPrice;
-	ArrayList<Item> items = new ArrayList<>();
+	List<Item> items = new ArrayList<>();
 
 	public void addItem(Item item) {
 		items.add(item);
