@@ -5,7 +5,7 @@ Javaのマルチスレッドと並行処理について学習します。
 ## 学習状況
 
 - [x] プロセスとスレッドの概要
-- [ ] スレッドの生成と実行
+- [x] スレッドの生成と実行
 - [ ] スレッドの制御とライフサイクル1
 - [ ] スレッドの制御とライフサイクル2
 - [ ] メモリの可視性
@@ -163,3 +163,534 @@ Javaのマルチスレッドと並行処理について学習します。
 - コンテキストスイッチによって、スレッドの実行状態を保存・復元しながら処理を切り替えられる
 - コンテキストスイッチには処理コストが発生するため、スレッド数を増やせば必ず高速になるわけではない
 - マルチスレッドによる共有データの問題を理解することが、今後学習する同期処理の基礎になる
+
+## 2. スレッドの生成と実行
+
+### Javaにおけるスレッドの基本概念
+
+- Javaでは、`Thread`クラスを利用して新しいスレッドを生成できる
+- スレッドを利用することで、複数の処理を並行して実行できる
+- Javaプログラムの実行開始時には、通常`main`スレッドが`main()`メソッドを実行する
+- 新しいスレッドを生成すると、`main`スレッドとは別の実行経路で処理を進められる
+- 複数のスレッドは、それぞれ独立したスタック領域を持つ
+- 一方で、同じプロセス内のスレッドはヒープ領域などを共有する
+- スレッドの実行順序は保証されず、OSのスケジューリングなどによって変化する
+
+### Threadクラスによるスレッドの生成
+
+- `Thread`クラスは、Javaでスレッドを扱うための基本的なクラス
+- `Thread`クラスを継承し、`run()`メソッドをオーバーライドすることで処理を定義できる
+- `run()`メソッドには、新しいスレッドで実行したい処理を記述する
+- `start()`メソッドを呼び出すことで、新しいスレッドの実行を開始する
+
+**コード例**
+
+```java
+public class ThreadStartMain {
+
+    public static void main(String[] args) {
+
+        Thread thread = new MyThread();
+        thread.start();
+
+        System.out.println("mainスレッド終了");
+    }
+
+    static class MyThread extends Thread {
+
+        @Override
+        public void run() {
+            System.out.println("新しいスレッド実行");
+        }
+    }
+}
+```
+
+- `MyThread`は`Thread`クラスを継承している
+- `run()`メソッドをオーバーライドして実行処理を定義している
+- `new MyThread()`によってスレッドオブジェクトを生成する
+- `start()`によって新しいスレッドの実行を開始する
+- `main`スレッドと`MyThread`は、それぞれ独立して処理を進める
+
+### start()とrun()の違い
+
+**start()メソッド**
+
+- 新しいスレッドの実行を開始するためのメソッド
+- JVMにスレッドの実行開始を要求する
+- 新しいスレッドで`run()`メソッドが実行される
+- `start()`を呼び出した直後に`run()`の処理が始まるとは限らない
+- 同じ`Thread`インスタンスに対して`start()`を2回呼び出すと`IllegalThreadStateException`が発生する
+
+**run()メソッド**
+
+- スレッドで実行する処理を定義するメソッド
+- `run()`を直接呼び出しても、新しいスレッドは生成されない
+- 通常のメソッド呼び出しと同じように、呼び出したスレッドで処理が実行される
+
+**コード例**
+
+```java
+public class StartVsRunMain {
+
+    public static void main(String[] args) {
+
+        Thread thread1 = new Thread(() -> {
+            System.out.println(
+                    Thread.currentThread().getName()
+            );
+        });
+
+        thread1.run();
+
+        Thread thread2 = new Thread(() -> {
+            System.out.println(
+                    Thread.currentThread().getName()
+            );
+        });
+
+        thread2.start();
+    }
+}
+```
+
+**出力例**
+
+```text
+main
+Thread-0
+```
+
+※ 自動生成されるスレッド名は実行環境などによって異なる。
+
+- `thread1.run()`は`main`スレッドで実行される
+- `thread2.start()`は新しいスレッドで実行される
+- マルチスレッド処理を実現する場合は、基本的に`start()`を使用する
+
+### mainスレッドと新しいスレッド
+
+- `main()`メソッドを実行するスレッドを`main`スレッドと呼ぶ
+- `main`スレッドから新しいスレッドを生成できる
+- 新しいスレッドを開始しても、`main`スレッドの処理は基本的に継続する
+- `start()`は新しいスレッドの処理完了を待つメソッドではない
+- `main()`メソッドが終了しても、実行中の一般スレッドが残っていれば通常JVMは終了しない
+
+### Thread.currentThread()
+
+- `Thread.currentThread()`は、現在処理を実行しているスレッドを取得する静的メソッド
+- 戻り値は`Thread`オブジェクト
+- 取得したスレッドから、名前や状態などの情報を確認できる
+- マルチスレッド環境で、どのスレッドが処理しているか確認する際に利用する
+
+**コード例**
+
+```java
+Thread current = Thread.currentThread();
+
+System.out.println(current.getName());
+```
+
+**主な関連メソッド**
+
+| メソッド | 説明 |
+| --- | --- |
+| `currentThread()` | 現在実行中のスレッドを取得 |
+| `getName()` | スレッド名を取得 |
+| `setName()` | スレッド名を設定 |
+| `getId()` | スレッドIDを取得 |
+| `getState()` | スレッドの状態を取得 |
+| `isDaemon()` | デーモンスレッドか確認 |
+
+※ `getId()`はJava 19以降非推奨であり、スレッド識別子の取得には`threadId()`が推奨される。
+
+### スレッド名の設定
+
+- スレッドには名前を設定できる
+- 名前を設定すると、ログやデバッグ時にスレッドを識別しやすくなる
+- `setName()`やコンストラクタを利用して設定できる
+
+**コード例**
+
+```java
+Thread thread = new Thread(() -> {
+    System.out.println(
+            Thread.currentThread().getName()
+    );
+}, "worker-1");
+
+thread.start();
+```
+
+**出力例**
+
+```text
+worker-1
+```
+
+### スレッドの実行順序
+
+- 複数のスレッドを開始しても、実行順序は保証されない
+- スレッドの生成順序と実際の処理順序は異なる場合がある
+- `start()`を先に呼び出したスレッドが、先に処理を完了するとは限らない
+- OSのスケジューリングやCPUの状況などによって実行順序が変化する
+- マルチスレッドプログラムでは、特定の実行順序に依存しない設計が重要になる
+
+### Thread.sleep()
+
+- `Thread.sleep()`は、現在実行中のスレッドを指定時間だけ一時停止する静的メソッド
+- 停止時間は主にミリ秒単位で指定する
+- 停止中は、基本的にCPUを使用して処理を進めない
+- 指定した時間が経過しても、すぐに実行が再開されるとは限らない
+- `sleep()`はスレッド間の正確な実行順序を保証するものではない
+- `InterruptedException`が発生する可能性があるため、例外処理が必要になる
+
+**コード例**
+
+```java
+public class SleepMain {
+
+    public static void main(String[] args) {
+
+        Thread thread = new Thread(() -> {
+
+            System.out.println("処理開始");
+
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+
+            System.out.println("処理再開");
+        });
+
+        thread.start();
+    }
+}
+```
+
+- `Thread.sleep(1000)`は約1秒間の停止を要求する
+- 停止するのは`Thread.sleep()`を実行したスレッド
+- `main`スレッドなど、他のスレッドまで停止するわけではない
+- 割り込みを受けた場合の処理については、スレッド制御の章で詳しく学習する
+
+### デーモンスレッド（Daemon Thread）
+
+- デーモンスレッドは、バックグラウンド処理などに利用されるスレッド
+- 一般スレッド（User Thread）とは、JVMの終了条件に関する扱いが異なる
+- すべての一般スレッドが終了すると、JVMはデーモンスレッドの完了を待たずに終了できる
+- デーモンスレッドが実行中でも、JVMが終了する可能性がある
+- デーモンスレッドは、終了時に処理が最後まで実行される保証がない
+- 必ず完了させる必要がある重要な処理には、デーモンスレッドを安易に使用しない
+
+### 一般スレッドとデーモンスレッドの違い
+
+| 比較項目 | 一般スレッド | デーモンスレッド |
+| --- | --- | --- |
+| 主な役割 | 通常のアプリケーション処理 | バックグラウンド処理 |
+| JVM終了への影響 | 実行中は通常JVMの終了を妨げる | 単独ではJVMの終了を妨げない |
+| 処理完了 | JVMの通常終了前に実行継続できる | 完了前にJVMが終了する可能性がある |
+| 設定方法 | 通常は一般スレッドとして生成 | `setDaemon(true)`などで設定 |
+
+### setDaemon(true)
+
+- `setDaemon(true)`によって、スレッドをデーモンスレッドに設定できる
+- `setDaemon(false)`によって一般スレッドに設定できる
+- `setDaemon()`はスレッドの開始前に呼び出す必要がある
+- 開始済みのスレッドに対して呼び出すと`IllegalThreadStateException`が発生する
+- `isDaemon()`によってデーモンスレッドか確認できる
+
+**コード例**
+
+```java
+public class DaemonMain {
+
+    public static void main(String[] args) {
+
+        Thread thread = new Thread(() -> {
+
+            while (true) {
+                System.out.println("デーモンスレッド実行中");
+
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        });
+
+        thread.setDaemon(true);
+        thread.start();
+
+        System.out.println("mainスレッド終了");
+    }
+}
+```
+
+**実行時の特徴**
+
+- 新しいスレッドはデーモンスレッドとして開始される
+- `main`スレッドが終了すると、他に一般スレッドが存在しない場合、JVMは終了できる
+- デーモンスレッドの`while`ループが無限に続く構造でも、JVMが終了する可能性がある
+- スレッドの実行タイミングによっては、デーモンスレッドの出力が表示されない場合もある
+
+### Runnableインターフェース
+
+- `Runnable`は、スレッドで実行する処理を表現するインターフェース
+- `Runnable`には、抽象メソッド`run()`が定義されている
+- `Runnable`を実装したクラスに実行処理を記述できる
+- `Runnable`自体が新しいスレッドを生成するわけではない
+- `Runnable`を`Thread`に渡すことで、新しいスレッドで処理を実行できる
+- `Runnable`を利用すると、処理内容とスレッドの実行管理を分離できる
+
+### Runnableによるスレッドの生成
+
+**コード例**
+
+```java
+public class RunnableMain {
+
+    public static void main(String[] args) {
+
+        Runnable task = new MyTask();
+
+        Thread thread = new Thread(task);
+
+        thread.start();
+    }
+
+    static class MyTask implements Runnable {
+
+        @Override
+        public void run() {
+            System.out.println("Runnable実行");
+        }
+    }
+}
+```
+
+**処理の流れ**
+
+1. `MyTask`クラスが`Runnable`を実装する
+2. `run()`メソッドに処理内容を定義する
+3. `MyTask`のインスタンスを生成する
+4. `Thread`のコンストラクタに`Runnable`を渡す
+5. `start()`を呼び出して新しいスレッドを開始する
+6. 新しいスレッドで`Runnable`の`run()`が実行される
+
+### Threadの継承とRunnableの実装
+
+| 比較項目 | Threadの継承 | Runnableの実装 |
+| --- | --- | --- |
+| 定義方法 | `extends Thread` | `implements Runnable` |
+| 実行処理 | `run()`をオーバーライド | `run()`を実装 |
+| スレッド開始 | `start()` | `Thread`に渡して`start()` |
+| クラスの継承 | 他のクラスを継承できない | 他のクラスを継承できる |
+| 処理とスレッド管理 | 一つのクラスにまとまりやすい | 分離しやすい |
+| 再利用性 | 比較的制限がある | 処理を再利用しやすい |
+
+**Runnableを利用する利点**
+
+- Javaではクラスを複数継承できないため、`Thread`を継承すると他のクラスを継承できなくなる
+- `Runnable`はインターフェースなので、他のクラスを継承しながら実装できる
+- 処理内容とスレッドの生成・管理を分離できる
+- 同じ`Runnable`インスタンスを複数のスレッドで実行することもできる
+- ただし、複数のスレッドが同じオブジェクトの状態を共有する場合は注意が必要になる
+
+### 匿名クラスによるRunnableの実装
+
+- `Runnable`は匿名クラスとして実装できる
+- 一度しか利用しない処理のために、個別のクラスを定義する必要がなくなる
+- ただし、ラムダ式と比較すると記述量が多くなる
+
+**コード例**
+
+```java
+Thread thread = new Thread(new Runnable() {
+
+    @Override
+    public void run() {
+        System.out.println("匿名クラス実行");
+    }
+});
+
+thread.start();
+```
+
+### ラムダ式によるRunnableの実装
+
+- `Runnable`は抽象メソッドを一つ持つ関数型インターフェース
+- 関数型インターフェースはラムダ式で実装できる
+- ラムダ式を使用すると、匿名クラスよりも簡潔に処理を記述できる
+- `Runnable`のラムダ式では、引数を受け取らず、戻り値も返さない
+- ラムダ式を記述しただけではスレッドは開始されない
+
+**コード例**
+
+```java
+Thread thread = new Thread(() -> {
+    System.out.println("ラムダ式実行");
+});
+
+thread.start();
+```
+
+**Runnableの実装方法の比較**
+
+```java
+// 1. 実装クラスを使用
+Runnable task1 = new MyTask();
+Thread thread1 = new Thread(task1);
+
+// 2. 匿名クラスを使用
+Thread thread2 = new Thread(new Runnable() {
+    @Override
+    public void run() {
+        System.out.println("匿名クラス");
+    }
+});
+
+// 3. ラムダ式を使用
+Thread thread3 = new Thread(() -> {
+    System.out.println("ラムダ式");
+});
+
+thread1.start();
+thread2.start();
+thread3.start();
+```
+
+- どの方法でも`Runnable`の処理を新しいスレッドで実行できる
+- 実装クラスは、処理が複雑な場合や再利用する場合に適している
+- 匿名クラスは、クラス名を定義せずに処理を記述できる
+- ラムダ式は、簡潔な処理を定義する場合に便利
+- ラムダ式は、後に学習する関数型インターフェースやStream APIにも関係する
+
+### 複数のスレッドの生成
+
+- `Thread`インスタンスを複数生成することで、複数のスレッドを実行できる
+- 各スレッドは独立して処理を進める
+- スレッドごとに異なる処理を実行することもできる
+- 同じ`Runnable`を複数のスレッドに渡すこともできる
+- 複数のスレッドを開始した順序と、処理の終了順序は一致するとは限らない
+
+**コード例**
+
+```java
+public class MultiThreadMain {
+
+    public static void main(String[] args) {
+
+        Runnable task = () -> {
+            String name = Thread.currentThread().getName();
+
+            for (int i = 1; i <= 3; i++) {
+                System.out.println(name + " : " + i);
+            }
+        };
+
+        Thread thread1 = new Thread(task, "thread-1");
+        Thread thread2 = new Thread(task, "thread-2");
+
+        thread1.start();
+        thread2.start();
+
+        System.out.println("main終了");
+    }
+}
+```
+
+**出力例**
+
+```text
+main終了
+thread-1 : 1
+thread-2 : 1
+thread-1 : 2
+thread-2 : 2
+thread-2 : 3
+thread-1 : 3
+```
+
+※ 実行結果の表示順序は毎回変化する可能性がある。
+
+- `thread1`と`thread2`は同じ`Runnable`を参照している
+- それぞれ別のスレッドとして`run()`を実行する
+- この例のローカル変数`name`や`i`は、各スレッドの実行ごとに独立している
+- 共有オブジェクトのフィールドなどを変更する場合は、データ競合に注意する必要がある
+
+### ログユーティリティの作成
+
+- マルチスレッド環境では、どのスレッドが処理を実行しているか確認することが重要になる
+- スレッド名や実行時間をログに表示すると、処理の流れを把握しやすくなる
+- ログ出力を共通メソッドにまとめることで、重複コードを減らせる
+- スレッドの実行順序や処理時間を確認する際にも活用できる
+
+**コード例**
+
+```java
+import java.time.LocalTime;
+
+public class MyLogger {
+
+    public static void log(Object message) {
+
+        System.out.printf(
+                "%s [%s] %s%n",
+                LocalTime.now(),
+                Thread.currentThread().getName(),
+                message
+        );
+    }
+}
+```
+
+**使用例**
+
+```java
+MyLogger.log("処理開始");
+```
+
+**出力例**
+
+```text
+17:30:15.123 [main] 処理開始
+```
+
+- `LocalTime.now()`で現在時刻を取得する
+- `Thread.currentThread().getName()`でスレッド名を取得する
+- `printf()`でログの形式を統一する
+- スレッド名を表示することで、複数のスレッドの動作を区別できる
+- 複数スレッドによるログの出力順序も、実行状況によって変化する
+
+### スレッド生成時の注意事項
+
+- `Thread`オブジェクトを生成するだけでは、新しいスレッドの処理は開始されない
+- `start()`を呼び出して初めて新しいスレッドの実行が開始される
+- `run()`を直接呼び出してもマルチスレッド処理にはならない
+- 同じ`Thread`インスタンスに対して`start()`を複数回呼び出すことはできない
+- スレッドの実行順序は保証されない
+- `Thread.sleep()`を使用しても正確な実行順序は保証されない
+- `setDaemon()`はスレッドの開始前に設定する必要がある
+- デーモンスレッドは、処理完了前にJVMが終了する可能性がある
+- 同じ`Runnable`を複数のスレッドで実行すると、参照するオブジェクトの状態が共有される場合がある
+- スレッド数を無制限に増やすと、メモリ使用量やスケジューリングの負荷が増加する可能性がある
+
+### スレッドの生成と実行のまとめ
+
+- Javaでは`Thread`クラスを使用してスレッドを生成できる
+- `run()`は実行する処理を定義するメソッド
+- `start()`は新しいスレッドの実行を開始するメソッド
+- `run()`を直接呼び出した場合は、新しいスレッドが生成されない
+- `Thread.currentThread()`によって現在実行中のスレッドを取得できる
+- `getName()`によってスレッド名を確認できる
+- `Thread.sleep()`によって現在のスレッドを一定時間停止できる
+- 一般スレッドがすべて終了すると、JVMはデーモンスレッドの終了を待たずに終了できる
+- `Runnable`を利用すると、処理内容とスレッドの管理を分離できる
+- `Runnable`は通常の実装クラス、匿名クラス、ラムダ式で実装できる
+- 複数のスレッドは独立して処理を進めるが、実行順序は保証されない
+- ログを活用することで、マルチスレッド環境の処理状況を確認しやすくなる
+- 複数スレッドによる共有データの問題を理解することが、今後の同期処理やスレッド制御の学習につながる
