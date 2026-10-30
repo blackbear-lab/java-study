@@ -6,7 +6,7 @@ Javaのマルチスレッドと並行処理について学習します。
 
 - [x] プロセスとスレッドの概要
 - [x] スレッドの生成と実行
-- [ ] スレッドの制御とライフサイクル1
+- [x] スレッドの制御とライフサイクル1
 - [ ] スレッドの制御とライフサイクル2
 - [ ] メモリの可視性
 - [ ] 同期処理 - synchronized
@@ -694,3 +694,659 @@ MyLogger.log("処理開始");
 - 複数のスレッドは独立して処理を進めるが、実行順序は保証されない
 - ログを活用することで、マルチスレッド環境の処理状況を確認しやすくなる
 - 複数スレッドによる共有データの問題を理解することが、今後の同期処理やスレッド制御の学習につながる
+
+
+## 3. スレッドの制御とライフサイクル1
+
+### スレッドの基本情報
+
+- `Thread`オブジェクトから、スレッドの名前・識別子・優先度・状態などを確認できる
+- スレッドの情報を確認すると、マルチスレッド環境での動作を把握しやすくなる
+- スレッドの名前はログやデバッグで特に役立つ
+- スレッドIDは識別用の値であり、実行順序や優先度を意味しない
+
+| メソッド | 説明 |
+| --- | --- |
+| `getName()` | スレッド名を取得する |
+| `setName(String)` | スレッド名を設定する |
+| `threadId()` | スレッドIDを取得する |
+| `getPriority()` | スレッドの優先度を取得する |
+| `getState()` | スレッドの現在の状態を取得する |
+| `isAlive()` | スレッドが開始済みで、まだ終了していないか確認する |
+| `isDaemon()` | デーモンスレッドか確認する |
+| `Thread.currentThread()` | 現在実行中のスレッドを取得する |
+
+※ `getId()`はJava 19以降非推奨。Java 19以降では`threadId()`を使用する。
+
+**コード例**
+
+```java
+public class ThreadInfoMain {
+    public static void main(String[] args) {
+        Thread thread = Thread.currentThread();
+
+        System.out.println("名前: " + thread.getName());
+        System.out.println("ID: " + thread.threadId());
+        System.out.println("優先度: " + thread.getPriority());
+        System.out.println("状態: " + thread.getState());
+        System.out.println("デーモン: " + thread.isDaemon());
+    }
+}
+```
+
+- `main`スレッドから実行すると、通常、スレッド名は`main`となる
+- IDなどの具体的な値は実行環境によって異なる
+- 優先度はスケジューラへのヒントであり、実行順序を保証しない
+
+### スレッドのライフサイクル
+
+- スレッドには、生成から終了までの間に複数の状態がある
+- Javaでは`Thread.State`列挙型でスレッドの状態を表す
+- `getState()`を使用すると、対象スレッドの状態を取得できる
+- スレッドの状態は、実行状況や待機方法によって変化する
+- 状態を取得した直後にも変化する可能性があるため、`getState()`は瞬間的な情報として扱う
+
+| 状態 | 意味 | 主な場面 |
+| --- | --- | --- |
+| `NEW` | 生成済みで、まだ開始していない | `new Thread(...)`の直後 |
+| `RUNNABLE` | JVM上で実行可能な状態 | `start()`後、実行中またはCPU待ち |
+| `BLOCKED` | `synchronized`のモニターロック取得待ち | 他のスレッドがモニターを保持している |
+| `WAITING` | 時間制限なしで他の処理を待機 | `join()`、`Object.wait()`など |
+| `TIMED_WAITING` | 指定時間内で待機 | `sleep()`、時間指定の`join()`など |
+| `TERMINATED` | 実行が終了した | `run()`の処理が終了した |
+
+**重要なポイント**
+
+- `RUNNABLE`は、CPUで実際に実行中の場合と、CPUの実行機会を待っている場合の両方を含む
+- `BLOCKED`は単純な時間待機ではなく、モニターロックの取得待ちを表す
+- `WAITING`と`TIMED_WAITING`は、時間制限の有無が主な違い
+- `TERMINATED`になったスレッドを再び`start()`することはできない
+
+### スレッドの状態遷移
+
+スレッドは実行状況に応じて状態を変更する。
+
+**基本的な流れ**
+
+1. `Thread`インスタンスを生成する
+2. `NEW`状態になる
+3. `start()`を呼び出す
+4. `RUNNABLE`状態になる
+5. 待機やロック取得によって状態が変化する
+6. 待機条件が解消されると`RUNNABLE`に戻る
+7. `run()`の処理が終了すると`TERMINATED`になる
+
+**状態遷移のイメージ**
+
+```text
+NEW
+ |
+ | start()
+ v
+RUNNABLE
+ |      ^
+ |      |
+ |      +------------------+
+ |                         |
+ +--> BLOCKED -------------+
+ |
+ +--> WAITING -------------+
+ |
+ +--> TIMED_WAITING -------+
+ |
+ | run()終了
+ v
+TERMINATED
+```
+
+※ 実際の状態遷移は、使用するメソッドや同期処理の状況によって異なる。
+
+### getState()による状態確認
+
+- `getState()`は対象スレッドの現在の状態を返す
+- スレッド開始前は`NEW`
+- `sleep()`中は通常`TIMED_WAITING`
+- スレッド終了後は`TERMINATED`
+- スレッドの実行状態は常に変化するため、状態確認だけで処理の順序を制御するべきではない
+
+**コード例**
+
+```java
+public class ThreadStateMain {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread thread = new Thread(() -> {
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "worker");
+
+        System.out.println(thread.getState());
+
+        thread.start();
+
+        Thread.sleep(100);
+
+        System.out.println(thread.getState());
+
+        thread.join();
+
+        System.out.println(thread.getState());
+    }
+}
+```
+
+**出力例**
+
+```text
+NEW
+TIMED_WAITING
+TERMINATED
+```
+
+- 最初はまだスレッドが開始されていないため`NEW`
+- `start()`後にスレッドが`Thread.sleep()`を実行すると`TIMED_WAITING`
+- `join()`で対象スレッドの終了を待つ
+- 対象スレッド終了後は`TERMINATED`
+- 実際の状態確認結果は実行タイミングによって変わる可能性がある
+
+### スレッドの例外処理
+
+- スレッド内で発生した例外は、そのスレッドの実行に影響する
+- 新しいスレッドで発生した例外は、`start()`を呼び出したスレッドの`catch`には直接伝播しない
+- スレッド内の例外を処理する場合は、そのスレッドの実行処理内で例外処理を行う
+- 未処理の例外によって`run()`が終了すると、そのスレッドは終了する
+- 他のスレッドは、例外が発生したスレッドとは独立して処理を継続できる
+
+**コード例**
+
+```java
+public class ThreadExceptionMain {
+
+    public static void main(String[] args) {
+
+        try {
+            Thread thread = new Thread(() -> {
+                throw new RuntimeException("スレッド内の例外");
+            });
+
+            thread.start();
+
+        } catch (RuntimeException e) {
+            System.out.println("mainで例外処理");
+        }
+    }
+}
+```
+
+**実行結果の特徴**
+
+- 新しいスレッド内で`RuntimeException`が発生する
+- `main`スレッドの`catch`では、その例外を直接捕捉できない
+- 未処理の例外は通常、スレッドの例外ハンドラーによって報告される
+- 例外が発生したスレッドは終了する
+
+### UncaughtExceptionHandler
+
+- `UncaughtExceptionHandler`は、スレッド内で捕捉されなかった例外を処理する仕組み
+- `setUncaughtExceptionHandler()`で対象スレッドの例外ハンドラーを設定できる
+- スレッド名や例外の内容をログに記録する場合などに使用する
+- 例外ハンドラーを設定しても、例外が発生した処理をそのまま再開できるわけではない
+
+**コード例**
+
+```java
+public class ExceptionHandlerMain {
+
+    public static void main(String[] args) {
+
+        Thread thread = new Thread(() -> {
+            throw new RuntimeException("エラー発生");
+        }, "worker");
+
+        thread.setUncaughtExceptionHandler(
+                (t, e) -> {
+                    System.out.println(
+                            "スレッド: " + t.getName()
+                    );
+                    System.out.println(
+                            "例外: " + e.getMessage()
+                    );
+                }
+        );
+
+        thread.start();
+    }
+}
+```
+
+**出力例**
+
+```text
+スレッド: worker
+例外: エラー発生
+```
+
+### Thread.sleep()
+
+- `Thread.sleep()`は、現在実行中のスレッドを指定時間だけ一時停止するメソッド
+- 指定時間はミリ秒単位で設定できる
+- `sleep()`を呼び出したスレッドが`TIMED_WAITING`状態になる
+- 指定時間が経過すると再び実行可能な状態になる
+- 指定時間の経過後、すぐにCPUで処理が再開されるとは限らない
+- 他のスレッドは基本的に独立して処理を継続する
+
+**コード例**
+
+```java
+public class SleepMain {
+
+    public static void main(String[] args) {
+
+        Thread thread = new Thread(() -> {
+
+            System.out.println("作業開始");
+
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+
+            System.out.println("作業再開");
+        });
+
+        thread.start();
+
+        System.out.println("mainスレッド実行");
+    }
+}
+```
+
+**出力例**
+
+```text
+作業開始
+mainスレッド実行
+作業再開
+```
+
+※ 最初の2行の出力順序は変わる可能性がある。
+
+**重要なポイント**
+
+- `Thread.sleep(2000)`は約2秒間の待機を要求する
+- 停止するのは`Thread.sleep()`を呼び出したスレッド
+- `thread.sleep()`という書き方でも、対象の`thread`ではなく現在実行中のスレッドが停止する
+- そのため、通常は`Thread.sleep()`というクラス名を使用した書き方が適切
+
+### sleep()とスレッドの状態
+
+`Thread.sleep()`を実行すると、スレッドは一定時間待機する。
+
+```text
+RUNNABLE
+   |
+   | Thread.sleep(1000)
+   v
+TIMED_WAITING
+   |
+   | 指定時間経過
+   v
+RUNNABLE
+```
+
+- `sleep()`はCPUの利用を一時的に停止する
+- `sleep()`中でも、保持しているモニターロックは自動的に解放されない
+- `sleep()`によってスレッドの実行順序が保証されるわけではない
+
+### InterruptedException
+
+- `InterruptedException`は、待機中のスレッドが割り込みを受けた場合などに発生するチェック例外
+- `Thread.sleep()`や`join()`では、割り込みを受ける可能性がある
+- チェック例外のため、`try-catch`または`throws`で対応する必要がある
+- 割り込みはスレッドに対する協調的な中断要求として使用される
+- 割り込みを受けた場合の具体的な動作は、プログラム側で適切に設計する必要がある
+
+**コード例**
+
+```java
+try {
+    Thread.sleep(1000);
+} catch (InterruptedException e) {
+    Thread.currentThread().interrupt();
+    return;
+}
+```
+
+- `sleep()`中に割り込みが発生すると、`InterruptedException`がスローされる
+- この例では`interrupt()`で割り込み状態を復元する
+- `return`によって現在の処理を終了する
+- 割り込み状態を復元するかどうかは、処理の目的や上位の設計によって判断する
+
+※ 割り込みの詳細については「スレッドの制御とライフサイクル2」で学習する。
+
+### Thread.join()
+
+- `join()`は、対象スレッドの終了を待つためのメソッド
+- `join()`を呼び出したスレッドが待機する
+- 対象スレッドは独立して処理を継続する
+- 対象スレッドが終了すると、待機していたスレッドは処理を再開できる
+- `join()`を使用すると、他のスレッドの処理結果が必要な場合に終了を待てる
+
+**コード例**
+
+```java
+public class JoinMain {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread thread = new Thread(() -> {
+
+            System.out.println("作業開始");
+
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+
+            System.out.println("作業終了");
+        });
+
+        thread.start();
+
+        System.out.println("main待機開始");
+
+        thread.join();
+
+        System.out.println("main処理再開");
+    }
+}
+```
+
+**出力例**
+
+```text
+main待機開始
+作業開始
+作業終了
+main処理再開
+```
+
+※ 最初の2行の順序は変わる可能性があるが、`main処理再開`は対象スレッドが終了した後に出力される。
+
+**処理の流れ**
+
+1. `main`スレッドが新しいスレッドを生成する
+2. `start()`によって新しいスレッドを開始する
+3. 新しいスレッドで作業を実行する
+4. `main`スレッドが`join()`を呼び出す
+5. `main`スレッドは対象スレッドの終了まで待機する
+6. 対象スレッドが終了する
+7. `main`スレッドが処理を再開する
+
+### join()とWAITING状態
+
+- 引数なしの`join()`では、呼び出したスレッドが対象スレッドの終了を待機する
+- 対象スレッドが実行中の場合、呼び出し元スレッドは通常`WAITING`状態になる
+- 対象スレッドが終了すると、呼び出し元スレッドは再び実行可能になる
+- `join()`は待機対象のスレッドを停止させるメソッドではない
+
+**状態遷移のイメージ**
+
+```text
+mainスレッド               workerスレッド
+
+RUNNABLE                   RUNNABLE
+   |                          |
+   | worker.join()            | 処理実行
+   v                          |
+WAITING                       |
+   |                          |
+   |                          | 処理終了
+   |                          v
+   |                       TERMINATED
+   v
+RUNNABLE
+   |
+   | 次の処理を実行
+```
+
+### join()が必要な理由
+
+- マルチスレッド処理では、他のスレッドがいつ終了するか保証されない
+- `start()`を呼び出しても、対象スレッドの処理完了を待たない
+- 他のスレッドの計算結果が必要な場合、そのスレッドの終了を待つ必要がある
+- `join()`を利用すると、対象スレッドの処理完了後に次の処理を実行できる
+
+**コード例**
+
+```java
+public class JoinResultMain {
+
+    private static int result = 0;
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread thread = new Thread(() -> {
+            for (int i = 1; i <= 100; i++) {
+                result += i;
+            }
+        });
+
+        thread.start();
+
+        thread.join();
+
+        System.out.println("計算結果: " + result);
+    }
+}
+```
+
+**出力**
+
+```text
+計算結果: 5050
+```
+
+- `thread`が1から100までの合計を計算する
+- `main`スレッドは`join()`によって計算完了を待機する
+- 対象スレッドが終了した後で`result`を参照する
+- `join()`による正常な終了待機にはメモリ可視性を保証する効果もある
+
+※ 複数のスレッドが同じ変数を同時に更新する場合は、別途同期処理が必要になることがある。
+
+### 複数スレッドでのjoin()
+
+- 複数のスレッドを生成して並行処理を実行できる
+- すべての処理が終了してから次の処理に進みたい場合、それぞれのスレッドに対して`join()`を呼び出す
+- 各スレッドは並行して処理を実行できる
+- `join()`を呼び出した順番にスレッドの処理が実行されるわけではない
+
+**コード例**
+
+```java
+public class MultiJoinMain {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread thread1 = new Thread(() -> {
+            System.out.println("作業1");
+        });
+
+        Thread thread2 = new Thread(() -> {
+            System.out.println("作業2");
+        });
+
+        Thread thread3 = new Thread(() -> {
+            System.out.println("作業3");
+        });
+
+        thread1.start();
+        thread2.start();
+        thread3.start();
+
+        thread1.join();
+        thread2.join();
+        thread3.join();
+
+        System.out.println("すべての作業終了");
+    }
+}
+```
+
+**出力例**
+
+```text
+作業2
+作業1
+作業3
+すべての作業終了
+```
+
+- 3つのスレッドは並行して実行される
+- `join()`によって各スレッドの終了を確認する
+- すべてのスレッドが終了すると最後のメッセージが出力される
+- 各作業の出力順序は保証されない
+
+### join(long millis)
+
+- `join(long millis)`は、対象スレッドの終了を指定時間内で待機するメソッド
+- 引数なしの`join()`と異なり、待機時間を制限できる
+- 対象スレッドが指定時間内に終了すると、その時点で待機を終了する
+- 指定時間が経過すると、対象スレッドがまだ実行中でも待機を終了できる
+- 時間指定の`join()`では、呼び出し元のスレッドは通常`TIMED_WAITING`状態になる
+- タイムアウトしても対象スレッドが自動的に停止するわけではない
+
+**コード例**
+
+```java
+public class TimedJoinMain {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread thread = new Thread(() -> {
+
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+
+            System.out.println("worker作業終了");
+        });
+
+        thread.start();
+
+        System.out.println("main待機開始");
+
+        thread.join(1000);
+
+        System.out.println("main待機終了");
+        System.out.println("worker生存: " + thread.isAlive());
+    }
+}
+```
+
+**出力例**
+
+```text
+main待機開始
+main待機終了
+worker生存: true
+worker作業終了
+```
+
+- `worker`は約3秒間の処理を実行する
+- `main`は`join(1000)`によって最大約1秒間待機する
+- `worker`がまだ実行中でも、時間が経過すると`main`が処理を再開する
+- `join(1000)`は対象スレッドを強制終了する処理ではない
+
+### join()のタイムアウト確認
+
+- `join(long millis)`は、対象スレッドが終了したかどうかを戻り値で通知しない
+- `join()`の戻り値は`void`
+- 待機終了後に`isAlive()`を使用すると、対象スレッドがまだ実行中か確認できる
+- 対象スレッドが実行中の場合、必要に応じて追加の待機や別の処理を検討する
+
+**コード例**
+
+```java
+thread.join(1000);
+
+if (thread.isAlive()) {
+    System.out.println("まだ処理中");
+} else {
+    System.out.println("処理完了");
+}
+```
+
+### sleep()とjoin()の違い
+
+| 比較項目 | `sleep()` | `join()` |
+| --- | --- | --- |
+| 主な目的 | 指定時間だけ待機する | 対象スレッドの終了を待つ |
+| 呼び出し方法 | `Thread.sleep(1000)` | `thread.join()` |
+| 待機するスレッド | 現在実行中のスレッド | `join()`を呼び出したスレッド |
+| 待機対象 | 時間 | 特定のスレッドの終了 |
+| 時間制限 | 指定時間が必要 | 指定可能 |
+| 主な状態 | `TIMED_WAITING` | `WAITING`または`TIMED_WAITING` |
+| 割り込み | `InterruptedException` | `InterruptedException` |
+| 使用場面 | 一定時間の待機 | 他の処理の完了待ち |
+
+**sleep()の例**
+
+```java
+Thread.sleep(1000);
+```
+
+- 現在のスレッドが約1秒待機する
+- 他のスレッドの終了とは関係しない
+
+**join()の例**
+
+```java
+thread.join();
+```
+
+- 現在のスレッドが`thread`の終了を待つ
+- 対象スレッドが終了すると次の処理へ進む
+
+### スレッド制御における注意事項
+
+- `start()`はスレッドを開始するだけで、処理完了を待たない
+- `sleep()`を使って実行順序を保証することはできない
+- `join()`は対象スレッドの終了を待つために使用する
+- `join()`を呼び出しているスレッドが待機し、対象スレッドは基本的に処理を継続する
+- `join(long millis)`がタイムアウトしても、対象スレッドは自動的に終了しない
+- `getState()`の結果は瞬間的な情報であるため、同期制御の代わりに使用しない
+- `InterruptedException`は無視せず、処理方針に応じて適切に対応する
+- 複数のスレッドが共有データを変更する場合は、データ競合に注意する
+- `sleep()`は保持しているモニターロックを解放しない
+- スレッドの終了待機と、共有データへの排他的アクセスは異なる概念
+
+### スレッドの制御とライフサイクル1のまとめ
+
+- スレッドの状態は`Thread.State`で表される
+- 主な状態は`NEW`、`RUNNABLE`、`BLOCKED`、`WAITING`、`TIMED_WAITING`、`TERMINATED`の6種類
+- `RUNNABLE`には実行中と実行可能な状態の両方が含まれる
+- `getState()`で状態を取得できるが、状態は随時変化する
+- 新しいスレッド内の例外は、`start()`側の`catch`に直接伝播しない
+- `Thread.sleep()`は現在のスレッドを指定時間待機させる
+- `join()`は指定した対象スレッドの終了を待つ
+- `join(long millis)`は時間制限付きで対象スレッドの終了を待つ
+- `sleep()`と`join()`は、いずれも呼び出したスレッドが待機する点が共通している
+- `InterruptedException`は待機中の割り込みを扱うために重要な例外
+- スレッドの状態と待機方法を理解することが、次の割り込み制御や同期処理の基礎になる
