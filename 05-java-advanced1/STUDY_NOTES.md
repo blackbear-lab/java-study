@@ -7,7 +7,7 @@ Javaのマルチスレッドと並行処理について学習します。
 - [x] プロセスとスレッドの概要
 - [x] スレッドの生成と実行
 - [x] スレッドの制御とライフサイクル1
-- [ ] スレッドの制御とライフサイクル2
+- [x] スレッドの制御とライフサイクル2
 - [ ] メモリの可視性
 - [ ] 同期処理 - synchronized
 - [ ] 高度な同期処理 - concurrent.Lock
@@ -1350,3 +1350,736 @@ thread.join();
 - `sleep()`と`join()`は、いずれも呼び出したスレッドが待機する点が共通している
 - `InterruptedException`は待機中の割り込みを扱うために重要な例外
 - スレッドの状態と待機方法を理解することが、次の割り込み制御や同期処理の基礎になる
+
+## 4. スレッドの制御とライフサイクル2
+
+### スレッドの割り込み（Interrupt）
+
+- 割り込み（Interrupt）は、スレッドに対して処理の中断を要求する仕組み
+- `interrupt()`メソッドを使用して、対象スレッドに割り込みを通知できる
+- 割り込みはスレッドを強制的に終了させる処理ではない
+- 実際に処理を終了するかどうかは、割り込みを受けたスレッド側の実装によって決まる
+- 割り込みを利用すると、実行中のスレッドや待機中のスレッドに終了要求を伝えられる
+- マルチスレッド環境で、スレッドを安全に終了させるための重要な仕組み
+
+**重要なポイント**
+
+- `interrupt()`は終了命令ではなく、中断要求
+- 割り込みを受けても、スレッドが必ず終了するわけではない
+- スレッド側で割り込みを確認し、適切に処理する必要がある
+- `sleep()`などで待機している場合は、`InterruptedException`が発生することがある
+
+### interrupt()メソッド
+
+- `interrupt()`は、対象スレッドに割り込みを通知するメソッド
+- 通常実行中のスレッドに対して呼び出すと、割り込みフラグが設定される
+- スレッドが割り込み可能な待機状態にある場合は、`InterruptedException`が発生することがある
+- 割り込みによって、他のスレッドから処理終了を要求できる
+
+**コード例**
+
+```java
+public class InterruptMain {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread thread = new Thread(() -> {
+
+            while (true) {
+
+                if (Thread.currentThread().isInterrupted()) {
+                    System.out.println("割り込みを確認");
+                    break;
+                }
+
+                System.out.println("作業中");
+            }
+
+            System.out.println("スレッド終了");
+        });
+
+        thread.start();
+
+        Thread.sleep(1000);
+
+        thread.interrupt();
+
+        thread.join();
+
+        System.out.println("mainスレッド終了");
+    }
+}
+```
+
+**処理の流れ**
+
+1. `main`スレッドが新しいスレッドを生成する
+2. 新しいスレッドで繰り返し処理を実行する
+3. `main`スレッドが約1秒間待機する
+4. `thread.interrupt()`で割り込みを要求する
+5. 新しいスレッドが`isInterrupted()`で割り込みを確認する
+6. 割り込みが確認されるとループを終了する
+7. `join()`でスレッドの終了を待機する
+8. `main`スレッドが処理を終了する
+
+※ この例は割り込み状態の確認を説明するためのものであり、実際の処理ではCPUを使い続けるループを避ける設計が必要になる。
+
+### 割り込みフラグ（Interrupt Flag）
+
+- Javaのスレッドには、割り込み状態を表すフラグが存在する
+- 通常、割り込みが発生していない状態では`false`
+- `interrupt()`を呼び出すと、割り込みフラグが`true`になる
+- `isInterrupted()`を使用すると、割り込みフラグの状態を確認できる
+- 割り込みフラグが`true`でも、スレッドが自動的に終了するわけではない
+- `InterruptedException`の発生や`Thread.interrupted()`によって、フラグがクリアされる場合がある
+
+**割り込みフラグのイメージ**
+
+```text
+通常状態
+    |
+    | interrupt()
+    v
+割り込みフラグ = true
+    |
+    | isInterrupted()
+    v
+割り込み状態を確認
+    |
+    | プログラム側で終了判断
+    v
+処理終了
+```
+
+※ `interrupt()`を呼び出しても、スレッドが終了しない場合がある。
+
+### isInterrupted()メソッド
+
+- `isInterrupted()`は、対象スレッドの割り込み状態を確認するメソッド
+- 割り込みフラグが設定されている場合は`true`を返す
+- 割り込みフラグが設定されていない場合は`false`を返す
+- `isInterrupted()`は割り込みフラグを変更しない
+- そのため、複数回呼び出しても、他の処理でフラグが変更されなければ同じ結果になる
+
+**コード例**
+
+```java
+public class IsInterruptedMain {
+
+    public static void main(String[] args) {
+
+        Thread thread = Thread.currentThread();
+
+        System.out.println(thread.isInterrupted());
+
+        thread.interrupt();
+
+        System.out.println(thread.isInterrupted());
+        System.out.println(thread.isInterrupted());
+    }
+}
+```
+
+**出力例**
+
+```text
+false
+true
+true
+```
+
+**重要なポイント**
+
+- `isInterrupted()`は割り込み状態を確認するだけ
+- 割り込みフラグをクリアしない
+- スレッドが終了要求を受けているか確認する場合に使用できる
+
+### Thread.interrupted()メソッド
+
+- `Thread.interrupted()`は、現在実行中のスレッドの割り込み状態を確認する静的メソッド
+- 割り込み状態を確認すると同時に、割り込みフラグをクリアする
+- 割り込みが発生している場合は`true`を返す
+- 割り込みフラグをクリアした後は、通常`false`になる
+- `isInterrupted()`とは異なり、割り込み状態が変更されるため注意が必要
+
+**コード例**
+
+```java
+public class InterruptedMain {
+
+    public static void main(String[] args) {
+
+        Thread thread = Thread.currentThread();
+
+        thread.interrupt();
+
+        System.out.println(thread.isInterrupted());
+
+        System.out.println(Thread.interrupted());
+
+        System.out.println(thread.isInterrupted());
+
+        System.out.println(Thread.interrupted());
+    }
+}
+```
+
+**出力例**
+
+```text
+true
+true
+false
+false
+```
+
+**処理の流れ**
+
+1. `interrupt()`によって割り込みフラグを`true`にする
+2. `isInterrupted()`で割り込み状態を確認する
+3. `Thread.interrupted()`で割り込み状態を取得する
+4. この時点で割り込みフラグがクリアされる
+5. 再度確認すると`false`になる
+
+### isInterrupted()とThread.interrupted()の違い
+
+| 比較項目 | `isInterrupted()` | `Thread.interrupted()` |
+| --- | --- | --- |
+| メソッドの種類 | インスタンスメソッド | 静的メソッド |
+| 確認対象 | 指定したスレッド | 現在実行中のスレッド |
+| 戻り値 | `boolean` | `boolean` |
+| 割り込み状態の確認 | 可能 | 可能 |
+| フラグのクリア | しない | する |
+| 主な用途 | 割り込み状態の確認 | 割り込み状態の取得とクリア |
+
+**注意事項**
+
+- `Thread.interrupted()`は、現在実行中のスレッドに対して作用する
+- `thread.interrupted()`と記述しても、`thread`の割り込み状態を確認するわけではない
+- 割り込みフラグを保持したまま確認したい場合は`isInterrupted()`を使用する
+- 割り込み状態を取得してクリアしたい場合は`Thread.interrupted()`を使用する
+
+### sleep()中の割り込み
+
+- `Thread.sleep()`を実行すると、現在のスレッドが指定時間待機する
+- 待機中のスレッドに対して`interrupt()`を呼び出すと、`InterruptedException`が発生する
+- `InterruptedException`が発生すると、スレッドの待機が解除される
+- 例外が発生した際、割り込みフラグはクリアされる
+- `catch`ブロック内で、その後の処理をどうするか決定する必要がある
+
+**コード例**
+
+```java
+public class InterruptSleepMain {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread thread = new Thread(() -> {
+
+            try {
+                System.out.println("作業開始");
+
+                Thread.sleep(5000);
+
+                System.out.println("作業完了");
+
+            } catch (InterruptedException e) {
+
+                System.out.println("割り込み発生");
+
+                System.out.println(
+                        "割り込み状態: "
+                        + Thread.currentThread().isInterrupted()
+                );
+            }
+
+            System.out.println("スレッド終了");
+        });
+
+        thread.start();
+
+        Thread.sleep(1000);
+
+        thread.interrupt();
+
+        thread.join();
+    }
+}
+```
+
+**出力例**
+
+```text
+作業開始
+割り込み発生
+割り込み状態: false
+スレッド終了
+```
+
+**重要なポイント**
+
+- `sleep(5000)`で約5秒間待機しようとする
+- 約1秒後に`main`スレッドから割り込みが要求される
+- 待機中のスレッドで`InterruptedException`が発生する
+- `sleep()`の待機が解除される
+- `InterruptedException`の発生に伴い、割り込みフラグがクリアされる
+- `catch`ブロックで終了処理などを実行できる
+
+※ `interrupt()`は、`sleep()`の指定時間が経過するまで待つ必要がない。
+
+### InterruptedExceptionと割り込みフラグ
+
+- `InterruptedException`は、割り込み可能な待機処理が中断された場合に発生する例外
+- `Thread.sleep()`や`join()`などで発生する可能性がある
+- `InterruptedException`が発生した際、割り込みフラグは通常クリアされる
+- 割り込みが発生した事実を上位の処理に伝える必要がある場合は、フラグを復元する方法がある
+- 割り込み状態を復元する場合は、`Thread.currentThread().interrupt()`を使用する
+
+**割り込みフラグの復元**
+
+```java
+try {
+    Thread.sleep(3000);
+
+} catch (InterruptedException e) {
+
+    Thread.currentThread().interrupt();
+
+    System.out.println("割り込み状態を復元");
+
+    return;
+}
+```
+
+**処理の流れ**
+
+1. `sleep()`中に割り込みが発生する
+2. `InterruptedException`がスローされる
+3. 割り込みフラグがクリアされる
+4. `catch`ブロックが実行される
+5. `interrupt()`で割り込み状態を復元する
+6. `return`で処理を終了する
+
+**注意事項**
+
+- 例外を捕捉した後に、必ず割り込み状態を復元する必要があるわけではない
+- 割り込みを上位の処理に伝える必要がある場合などに復元を検討する
+- `InterruptedException`を上位に伝播できる場合は、そのまま`throws`で伝える方法もある
+- 単に例外を無視すると、終了要求が適切に処理されない場合がある
+
+### 割り込みを無視した場合の問題
+
+- `interrupt()`を呼び出しても、対象スレッドが割り込みを処理しなければ実行を継続することがある
+- `InterruptedException`を捕捉した後、何もせずに処理を継続すると終了要求が失われる場合がある
+- 特に、`sleep()`を繰り返す処理では注意が必要になる
+
+**問題のあるコード例**
+
+```java
+while (true) {
+
+    try {
+        Thread.sleep(1000);
+
+    } catch (InterruptedException e) {
+        // 割り込みを無視
+    }
+
+    System.out.println("作業継続");
+}
+```
+
+- 割り込みが発生しても、ループが終了しない
+- `InterruptedException`によって割り込みフラグがクリアされる
+- 次の処理に進み、再びループが実行される
+
+**改善例**
+
+```java
+while (true) {
+
+    try {
+        Thread.sleep(1000);
+
+    } catch (InterruptedException e) {
+
+        System.out.println("終了要求を受信");
+
+        Thread.currentThread().interrupt();
+
+        break;
+    }
+
+    System.out.println("作業継続");
+}
+```
+
+- 割り込みを受けた場合はループを終了する
+- 必要に応じて割り込み状態を復元する
+- スレッドの終了要求を適切に処理できる
+
+### プリンター例題1 - 開始
+
+- プリンターの処理を別スレッドで実行するサンプルプログラム
+- 印刷処理を繰り返し実行する仕組みについて学習
+- `main`スレッドと印刷スレッドが独立して動作することを確認する
+- 繰り返し処理を実行するスレッドに対して、終了制御が必要になることを理解する
+
+**コード例（学習用）**
+
+```java
+public class PrinterMainV1 {
+
+    public static void main(String[] args) {
+
+        Thread printer = new Thread(() -> {
+
+            for (int i = 1; i <= 10; i++) {
+
+                System.out.println("印刷中: " + i);
+
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+
+        }, "printer");
+
+        printer.start();
+
+        System.out.println("mainスレッド終了");
+    }
+}
+```
+
+**重要なポイント**
+
+- `printer`スレッドで印刷処理を実行する
+- `main`スレッドとは独立して処理を進める
+- `sleep()`で印刷処理の間隔を調整する
+- `main`スレッドの処理が終了しても、一般スレッドである`printer`は処理を継続できる
+
+### プリンター例題2 - 割り込みの導入
+
+- 印刷処理を実行しているスレッドに対して、割り込みを要求する
+- `interrupt()`を使用して印刷スレッドに終了要求を通知する
+- `InterruptedException`によって、待機中の印刷処理を中断できることを確認する
+
+**コード例（学習用）**
+
+```java
+public class PrinterMainV2 {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread printer = new Thread(() -> {
+
+            while (true) {
+
+                try {
+                    System.out.println("印刷中");
+
+                    Thread.sleep(1000);
+
+                } catch (InterruptedException e) {
+
+                    System.out.println("印刷中断");
+
+                    break;
+                }
+            }
+
+            System.out.println("プリンター終了");
+
+        }, "printer");
+
+        printer.start();
+
+        Thread.sleep(3000);
+
+        printer.interrupt();
+
+        printer.join();
+
+        System.out.println("すべての処理終了");
+    }
+}
+```
+
+**処理の流れ**
+
+1. プリンタースレッドを開始する
+2. 印刷処理を繰り返し実行する
+3. `main`スレッドが約3秒間待機する
+4. `printer.interrupt()`で終了を要求する
+5. `sleep()`中であれば`InterruptedException`が発生する
+6. `catch`ブロックで印刷処理を終了する
+7. `join()`で印刷スレッドの終了を待機する
+
+### プリンター例題3 - 割り込み処理の改善
+
+- 割り込みを利用した終了制御を改善する
+- `isInterrupted()`で割り込み状態を確認する方法について学習
+- `InterruptedException`による割り込みと、通常実行中の割り込みの違いを理解する
+- スレッドが適切なタイミングで終了できるように処理を設計する
+
+**コード例（学習用）**
+
+```java
+public class PrinterMainV3 {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread printer = new Thread(() -> {
+
+            while (!Thread.currentThread().isInterrupted()) {
+
+                try {
+                    System.out.println("印刷中");
+
+                    Thread.sleep(1000);
+
+                } catch (InterruptedException e) {
+
+                    Thread.currentThread().interrupt();
+
+                    break;
+                }
+            }
+
+            System.out.println("プリンター終了");
+
+        }, "printer");
+
+        printer.start();
+
+        Thread.sleep(3000);
+
+        printer.interrupt();
+
+        printer.join();
+    }
+}
+```
+
+**改善ポイント**
+
+- `while`の条件で割り込み状態を確認する
+- 割り込みフラグが`true`の場合はループを継続しない
+- `sleep()`中の割り込みは`catch`で処理する
+- `InterruptedException`が発生した場合は、必要に応じて割り込み状態を復元する
+- `break`によって終了処理へ進む
+
+**重要なポイント**
+
+- スレッドが通常実行中の場合、`isInterrupted()`による確認が有効
+- `sleep()`中の割り込みは`InterruptedException`で通知される
+- 割り込み状態を確認する処理と、例外を処理する仕組みの両方を理解することが重要
+
+### Thread.yield() - CPUの実行機会を譲る
+
+- `Thread.yield()`は、現在実行中のスレッドがCPUの実行機会を他のスレッドに譲るよう要求する静的メソッド
+- CPUを使用する必要がないタイミングなどで、スケジューラに実行機会の調整を促すために使用できる
+- `yield()`はスケジューラに対するヒントであり、必ず他のスレッドが実行されるわけではない
+- `yield()`を呼び出しても、指定時間だけ待機するわけではない
+- `yield()`によってスレッドの実行順序が保証されることはない
+- `yield()`を呼び出したスレッドは、引き続き`RUNNABLE`状態である
+
+**コード例**
+
+```java
+public class YieldMain {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Runnable task = () -> {
+
+            for (int i = 1; i <= 5; i++) {
+
+                System.out.println(
+                        Thread.currentThread().getName()
+                        + " : " + i
+                );
+
+                Thread.yield();
+            }
+        };
+
+        Thread thread1 = new Thread(task, "thread-1");
+        Thread thread2 = new Thread(task, "thread-2");
+
+        thread1.start();
+        thread2.start();
+
+        thread1.join();
+        thread2.join();
+    }
+}
+```
+
+**出力例**
+
+```text
+thread-1 : 1
+thread-2 : 1
+thread-1 : 2
+thread-2 : 2
+thread-1 : 3
+thread-2 : 3
+thread-1 : 4
+thread-2 : 4
+thread-1 : 5
+thread-2 : 5
+```
+
+※ 実際の実行順序は保証されず、上記とは異なる順序になる場合がある。
+
+**重要なポイント**
+
+- `yield()`は他のスレッドへの実行機会の譲渡を提案する
+- OSのスケジューラが必ず要求に従うわけではない
+- `yield()`の直後に同じスレッドが再び実行されることもある
+- `yield()`はスレッド間の処理順序を制御するための確実な手段ではない
+
+### プリンター例題4 - yieldの導入
+
+- プリンターの処理に`Thread.yield()`を導入する
+- 複数のスレッドが実行される環境で、CPUの実行機会を譲る仕組みについて学習
+- `yield()`を追加した場合でも、スレッドの実行順序は保証されないことを確認する
+
+**コード例（学習用）**
+
+```java
+public class PrinterMainV4 {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Runnable printTask = () -> {
+
+            for (int i = 1; i <= 10; i++) {
+
+                if (Thread.currentThread().isInterrupted()) {
+                    break;
+                }
+
+                System.out.println(
+                        Thread.currentThread().getName()
+                        + " 印刷中: " + i
+                );
+
+                Thread.yield();
+            }
+
+            System.out.println(
+                    Thread.currentThread().getName()
+                    + " 印刷終了"
+            );
+        };
+
+        Thread printer1 = new Thread(printTask, "printer-1");
+        Thread printer2 = new Thread(printTask, "printer-2");
+
+        printer1.start();
+        printer2.start();
+
+        printer1.join();
+        printer2.join();
+    }
+}
+```
+
+**重要なポイント**
+
+- `printer1`と`printer2`は独立して印刷処理を進める
+- `Thread.yield()`によって、他のスレッドに実行機会を譲るよう要求する
+- 実際の処理順序はOSのスケジューリングによって変化する
+- `yield()`は性能向上を保証するものではない
+- `yield()`を利用しても、スレッド間の正確な実行順序は制御できない
+
+### sleep()とyield()の違い
+
+| 比較項目 | `Thread.sleep()` | `Thread.yield()` |
+| --- | --- | --- |
+| 主な目的 | 指定時間だけ待機する | CPUの実行機会を譲るよう要求する |
+| 引数 | 待機時間 | なし |
+| スレッド状態 | `TIMED_WAITING` | `RUNNABLE` |
+| 待機時間 | 指定する | 指定しない |
+| CPUの実行機会 | 待機中は通常CPUを使用しない | スケジューラの判断に依存 |
+| 実行順序の保証 | なし | なし |
+| 割り込み例外 | 発生する可能性がある | 発生しない |
+
+**sleep()の例**
+
+```java
+Thread.sleep(1000);
+```
+
+- 現在のスレッドが約1秒間待機する
+- 指定時間が経過するまでは、通常処理を再開しない
+- 割り込みによって待機が解除される場合がある
+
+**yield()の例**
+
+```java
+Thread.yield();
+```
+
+- 現在のスレッドがCPUの実行機会を譲るよう要求する
+- 必ず他のスレッドに切り替わるとは限らない
+- 呼び出し直後に同じスレッドの処理が継続する場合もある
+
+### interrupt()とsleep()とjoin()とyield()の比較
+
+| メソッド | 主な目的 | 作用するスレッド | 特徴 |
+| --- | --- | --- | --- |
+| `interrupt()` | 割り込み要求 | 対象スレッド | 強制終了ではない |
+| `sleep()` | 時間待機 | 現在のスレッド | 指定時間待機する |
+| `join()` | 終了待機 | 呼び出し元スレッド | 対象スレッドの終了を待つ |
+| `yield()` | CPU実行機会の譲渡要求 | 現在のスレッド | 実際の切り替えは保証されない |
+
+**使用場面の例**
+
+- バックグラウンド処理に終了を要求したい場合は`interrupt()`
+- 一定時間だけ処理を待機させたい場合は`sleep()`
+- 他のスレッドの処理完了を待ちたい場合は`join()`
+- CPU実行機会を他のスレッドに譲るヒントを与えたい場合は`yield()`
+
+### スレッド制御における注意事項
+
+- `interrupt()`はスレッドを強制終了するメソッドではない
+- 割り込みを受けたスレッドが、適切に処理する必要がある
+- `isInterrupted()`は割り込みフラグをクリアしない
+- `Thread.interrupted()`は現在のスレッドの割り込みフラグをクリアする
+- `InterruptedException`が発生すると、通常は割り込みフラグがクリアされる
+- 割り込みを無視すると、スレッドが終了要求に応答しなくなる可能性がある
+- 割り込みを利用して終了制御を実装する場合は、ループ条件や例外処理を適切に設計する
+- `yield()`はCPUの実行機会を譲るヒントであり、処理順序を保証しない
+- `sleep()`と`yield()`は、どちらもスレッドの実行順序を保証するための方法ではない
+- `join()`は対象スレッドの終了を待つために使用する
+- スレッドの終了要求と、スレッドの終了待機は異なる概念
+- マルチスレッド環境では、スレッドの状態と実行タイミングが随時変化することを意識する
+
+### スレッドの制御とライフサイクル2のまとめ
+
+- 割り込み（Interrupt）は、スレッドに処理の中断を要求する仕組み
+- `interrupt()`はスレッドを強制終了させるものではない
+- 割り込みフラグによって、スレッドの割り込み状態を管理する
+- `isInterrupted()`は対象スレッドの割り込み状態を確認し、フラグを変更しない
+- `Thread.interrupted()`は現在のスレッドの割り込み状態を確認し、フラグをクリアする
+- `sleep()`などの待機中に割り込みが発生すると、`InterruptedException`が発生する
+- `InterruptedException`の発生時には、通常、割り込みフラグがクリアされる
+- 必要に応じて`Thread.currentThread().interrupt()`で割り込み状態を復元できる
+- 割り込み要求を適切に処理することで、スレッドを安全に終了させる設計ができる
+- プリンターの例題を通して、割り込みを利用した処理終了の基本的な実装方法について学習
+- `Thread.yield()`は、現在のスレッドがCPUの実行機会を他のスレッドに譲るよう要求するメソッド
+- `yield()`はスケジューラへのヒントであり、実際の実行順序を保証しない
+- `sleep()`は時間待機、`join()`は終了待機、`interrupt()`は中断要求、`yield()`はCPU実行機会の譲渡要求に使用する
+- スレッドの割り込みと実行制御を理解することで、今後学習するメモリの可視性や同期処理の基礎につながる
