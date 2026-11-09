@@ -9,8 +9,8 @@ Javaのマルチスレッドと並行処理について学習します。
 - [x] スレッドの制御とライフサイクル1
 - [x] スレッドの制御とライフサイクル2
 - [x] メモリの可視性
-- [ ] 同期処理 - synchronized
-- [ ] 高度な同期処理 - concurrent.Lock
+- [x] 同期処理 - synchronized
+- [x] 高度な同期処理 - concurrent.Lock
 - [ ] 生産者・消費者問題1
 - [ ] 生産者・消費者問題2
 - [ ] CAS - 同期処理とアトミック操作
@@ -3682,3 +3682,814 @@ public void process() {
 - 同期処理は、共有データを安全に保護できる範囲で適切に設計する必要がある
 - 銀行口座の出金例題を通して、競合状態の発生原因と`synchronized`による改善方法について学習
 - `synchronized`の仕組みを理解することは、今後学習する`Lock`や並行処理におけるスレッドセーフな設計の基礎になる
+
+
+## 7. 高度な同期処理 - concurrent.Lock
+
+### 高度な同期処理の概要
+
+- Javaでは、`synchronized`以外にもスレッドを制御する仕組みが用意されている
+- `java.util.concurrent.locks`パッケージには、より柔軟な同期処理を実現するためのクラスやインターフェースが存在する
+- `LockSupport`は、スレッドの待機と再開を制御するためのクラス
+- `ReentrantLock`は、共有データへのアクセスを制御するための再入可能な排他ロック
+- `LockSupport`による待機制御と、`ReentrantLock`による排他制御は目的が異なる
+- 高度な同期処理を理解するためには、スレッドの状態、割り込み、ロックの仕組みを理解する必要がある
+
+### LockSupportの基本概念
+
+`LockSupport`は、スレッドを待機させたり、待機しているスレッドに実行再開の許可を与えたりするためのクラス。
+
+**主なメソッド**
+
+| メソッド | 説明 |
+| --- | --- |
+| `park()` | 現在のスレッドを待機させる |
+| `unpark(Thread)` | 指定したスレッドに許可証を与える |
+| `parkNanos(long)` | 指定した時間を上限として待機する |
+| `parkUntil(long)` | 指定した期限まで待機する |
+
+**重要なポイント**
+
+- `park()`は現在実行中のスレッドに作用する
+- `unpark()`は指定したスレッドに作用する
+- `park()`は通常`WAITING`状態になる
+- `parkNanos()`による待機は通常`TIMED_WAITING`状態になる
+- `LockSupport`はスレッドの待機を制御する仕組みであり、共有データを自動的に保護するわけではない
+
+### LockSupport.park()
+
+`park()`は、現在実行中のスレッドを待機させるためのメソッド。
+
+**コード例**
+
+```java
+import java.util.concurrent.locks.LockSupport;
+
+public class LockSupportMain {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread worker = new Thread(() -> {
+
+            System.out.println("作業開始");
+
+            LockSupport.park();
+
+            System.out.println("作業再開");
+        });
+
+        worker.start();
+
+        Thread.sleep(1000);
+
+        LockSupport.unpark(worker);
+
+        worker.join();
+
+        System.out.println("すべての作業終了");
+    }
+}
+```
+
+**出力例**
+
+```text
+作業開始
+作業再開
+すべての作業終了
+```
+
+**処理の流れ**
+
+1. `worker`スレッドを生成する
+2. `start()`によってスレッドを開始する
+3. `worker`が`LockSupport.park()`を呼び出す
+4. 許可証がなく、割り込みなども発生していなければ待機する
+5. `main`スレッドが`unpark(worker)`を呼び出す
+6. `worker`に許可証が与えられる
+7. `worker`は待機から復帰して処理を継続する
+8. `join()`によってスレッドの終了を待つ
+
+**重要なポイント**
+
+- `park()`の戻り値は`void`
+- `park()`は許可証以外の理由でも復帰する可能性がある
+- `unpark()`はスレッドの即時実行を保証しない
+- 復帰後、実際にCPUで処理を再開するタイミングはスケジューラに依存する
+- この例は基本的な動作を確認するためのものであり、実際の待機処理では条件を再確認する必要がある
+
+### LockSupportの許可証（Permit）
+
+`LockSupport`は、スレッドごとに許可証（Permit）を管理する。
+
+許可証は、スレッドが待機せずに処理を進められるかどうかを制御するための仕組み。
+
+**基本的なルール**
+
+- スレッドごとに保持できる許可証は最大1つ
+- 許可証がない状態で`park()`を実行すると、通常は待機する
+- 許可証がある状態で`park()`を実行すると、許可証を消費して待機せずに復帰する
+- `unpark()`を呼び出すと、対象スレッドに許可証を与える
+- 許可証がすでにある状態で`unpark()`を呼び出しても、許可証は増えない
+
+**許可証のイメージ**
+
+```text
+許可証なし（0）
+      |
+      | unpark(thread)
+      v
+許可証あり（1）
+      |
+      | park()
+      v
+許可証なし（0）
+```
+
+**重要なポイント**
+
+`unpark()`を2回実行しても、許可証が2つ蓄積されるわけではない。
+
+許可証の状態は基本的に`0`または`1`となる。
+
+### unpark()を先に実行した場合
+
+`LockSupport`では、`unpark()`を`park()`より先に呼び出すことができる。
+
+**コード例**
+
+```java
+import java.util.concurrent.locks.LockSupport;
+
+public class PermitMain {
+
+    public static void main(String[] args) {
+
+        Thread thread = Thread.currentThread();
+
+        LockSupport.unpark(thread);
+
+        System.out.println("park開始");
+
+        LockSupport.park();
+
+        System.out.println("park終了");
+    }
+}
+```
+
+**出力**
+
+```text
+park開始
+park終了
+```
+
+**処理の流れ**
+
+1. `main`スレッドを取得する
+2. `unpark()`によって許可証を与える
+3. `park()`を呼び出す
+4. すでに許可証が存在するため、待機せずに復帰する
+5. 許可証は消費される
+
+**重要なポイント**
+
+- `unpark()`を先に実行しても問題ない
+- 許可証が残っていれば、次の`park()`で使用される
+- 許可証はスレッドごとに管理される
+- `unpark()`はスレッドを強制的に実行させるメソッドではない
+
+### park()による待機とスレッド状態
+
+`LockSupport.park()`によって待機したスレッドは、通常`WAITING`状態になる。
+
+```text
+RUNNABLE
+    |
+    | LockSupport.park()
+    v
+WAITING
+    |
+    | unpark()などで復帰
+    v
+RUNNABLE
+```
+
+**synchronizedとの違い**
+
+- `synchronized`のモニターロック取得待ちでは`BLOCKED`状態になる
+- `LockSupport.park()`では通常`WAITING`状態になる
+- どちらも待機する場合があるが、待機する理由と仕組みが異なる
+
+### LockSupportと割り込み
+
+`LockSupport.park()`による待機中に割り込みが発生すると、待機から復帰することがある。
+
+**コード例**
+
+```java
+import java.util.concurrent.locks.LockSupport;
+
+public class ParkInterruptMain {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread worker = new Thread(() -> {
+
+            System.out.println("待機開始");
+
+            LockSupport.park();
+
+            System.out.println("待機終了");
+
+            System.out.println(
+                    "割り込み状態: "
+                    + Thread.currentThread().isInterrupted()
+            );
+        });
+
+        worker.start();
+
+        Thread.sleep(1000);
+
+        worker.interrupt();
+
+        worker.join();
+    }
+}
+```
+
+**出力例**
+
+```text
+待機開始
+待機終了
+割り込み状態: true
+```
+
+**重要なポイント**
+
+- `park()`による待機は割り込みによって解除される場合がある
+- `park()`自体は`InterruptedException`をスローしない
+- 割り込みによって`park()`から復帰しても、割り込みフラグはクリアされない
+- 割り込み状態が`true`のまま再度`park()`を呼び出すと、すぐに復帰する場合がある
+- 割り込みをどう扱うかは、呼び出し側で適切に判断する必要がある
+
+### sleep()とpark()の違い
+
+| 比較項目 | `Thread.sleep()` | `LockSupport.park()` |
+| --- | --- | --- |
+| 主な目的 | 指定時間の待機 | 許可証などに基づく待機 |
+| 時間指定 | 基本的に必要 | 不要 |
+| スレッド状態 | `TIMED_WAITING` | 通常`WAITING` |
+| 待機解除 | 時間経過・割り込みなど | 許可証・割り込み・その他の理由 |
+| 割り込み例外 | `InterruptedException` | スローしない |
+| 割り込みフラグ | 例外発生時にクリア | 割り込みによる復帰ではクリアしない |
+
+**重要なポイント**
+
+- `sleep()`は時間を基準とした待機
+- `park()`は許可証を利用した待機
+- `park()`は予期せず復帰する可能性があるため、待機条件をループで確認する設計が重要
+- どちらも、それ自体では共有データへの排他制御を実現しない
+
+### ReentrantLockの基本概念
+
+`ReentrantLock`は、明示的にロックの取得と解放を制御するためのクラス。
+
+`java.util.concurrent.locks`パッケージに含まれている。
+
+**基本概念**
+
+- `synchronized`と同様に排他制御を実現できる
+- `lock()`によってロックを取得する
+- `unlock()`によってロックを解放する
+- ロックを取得しているスレッドだけが、同じロックで保護された処理を実行できる
+- ロックを取得できないスレッドは待機する
+- 再入可能なロックであり、同じスレッドが同じロックを繰り返し取得できる
+- ロック取得の試行、時間制限、割り込み可能な待機などを利用できる
+
+**主なメソッド**
+
+| メソッド | 説明 |
+| --- | --- |
+| `lock()` | ロックを取得するまで待機する |
+| `unlock()` | ロックを解放する |
+| `tryLock()` | ロックの即時取得を試みる |
+| `tryLock(time, unit)` | 指定時間内でロック取得を試みる |
+| `lockInterruptibly()` | 割り込み可能な状態でロック取得を待つ |
+| `isLocked()` | ロックが取得されているか確認する |
+| `isHeldByCurrentThread()` | 現在のスレッドがロックを保持しているか確認する |
+
+### ReentrantLockの基本的な使用方法
+
+**コード例**
+
+```java
+import java.util.concurrent.locks.ReentrantLock;
+
+public class ReentrantLockMain {
+
+    private static final ReentrantLock lock =
+            new ReentrantLock();
+
+    private static int count = 0;
+
+    public static void increment() {
+
+        lock.lock();
+
+        try {
+            count++;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        Thread thread1 = new Thread(
+                ReentrantLockMain::increment
+        );
+
+        Thread thread2 = new Thread(
+                ReentrantLockMain::increment
+        );
+
+        thread1.start();
+        thread2.start();
+
+        thread1.join();
+        thread2.join();
+
+        System.out.println("count = " + count);
+    }
+}
+```
+
+**出力**
+
+```text
+count = 2
+```
+
+**処理の流れ**
+
+1. `ReentrantLock`インスタンスを生成する
+2. 2つのスレッドが同じロックを共有する
+3. 一方のスレッドが`lock()`でロックを取得する
+4. ロックを取得したスレッドが`count++`を実行する
+5. `finally`でロックを解放する
+6. 他のスレッドがロックを取得する
+7. 同じ処理を実行する
+8. すべての処理が終了すると`count`は`2`になる
+
+**重要なポイント**
+
+- 2つのスレッドが同じ`ReentrantLock`インスタンスを使用している
+- `count++`全体を排他制御できる
+- ロックを取得した場合は、必ず解放する必要がある
+- `synchronized`とは異なり、ロックを明示的に解放する
+
+### try-finallyによるロック解放
+
+`ReentrantLock`を使用する場合は、`try-finally`によるロック解放が重要。
+
+**推奨される基本構文**
+
+```java
+lock.lock();
+
+try {
+    // ロックで保護する処理
+} finally {
+    lock.unlock();
+}
+```
+
+**理由**
+
+- `try`内の処理で例外が発生しても`finally`が実行される
+- ロックを解放し忘れる問題を防止できる
+- ロックが解放されないまま残ると、他のスレッドが待機し続ける可能性がある
+
+**注意事項**
+
+- `unlock()`はロックを取得したスレッドが実行する必要がある
+- ロックを保持していないスレッドが`unlock()`すると`IllegalMonitorStateException`が発生する
+- ロック取得に成功したことを確認してから`unlock()`する必要がある
+
+### 再入可能ロック（Reentrant Lock）
+
+`ReentrantLock`は、同じスレッドが同じロックを複数回取得できる。
+
+これを再入可能（Reentrant）という。
+
+**コード例**
+
+```java
+import java.util.concurrent.locks.ReentrantLock;
+
+public class ReentrantMain {
+
+    private static final ReentrantLock lock =
+            new ReentrantLock();
+
+    public static void main(String[] args) {
+
+        lock.lock();
+
+        try {
+            System.out.println("1回目のロック取得");
+
+            lock.lock();
+
+            try {
+                System.out.println("2回目のロック取得");
+            } finally {
+                lock.unlock();
+            }
+
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+```
+
+**出力**
+
+```text
+1回目のロック取得
+2回目のロック取得
+```
+
+**重要なポイント**
+
+- 同じスレッドであれば、同じロックを複数回取得できる
+- ロック内部で再び同じロックを取得しても、それだけではデッドロックにならない
+- 取得した回数だけ`unlock()`する必要がある
+- ロック取得回数が0になると、他のスレッドがロックを取得できるようになる
+- `synchronized`のモニターロックも再入可能である
+
+### ReentrantLockとスレッド状態
+
+`ReentrantLock`のロックを取得できない場合、スレッドは内部の待機機構によって待機する。
+
+**基本的な流れ**
+
+```text
+thread-1
+    |
+    | lock()
+    v
+ロック取得
+    |
+    | 臨界領域を実行
+    v
+unlock()
+    |
+    v
+ロック解放
+
+
+thread-2
+    |
+    | lock()
+    v
+ロック取得不可
+    |
+    v
+WAITINGなど
+    |
+    | ロック取得可能
+    v
+RUNNABLE
+    |
+    v
+臨界領域を実行
+```
+
+**重要なポイント**
+
+- `synchronized`のモニターロック取得待ちは`BLOCKED`
+- `ReentrantLock`の待機は内部で`LockSupport`などを利用する
+- `ReentrantLock.lock()`の取得待ちは通常`WAITING`状態になる
+- 時間制限付きの取得待ちは`TIMED_WAITING`状態になる場合がある
+- 実際のスレッド状態は、内部の処理や取得タイミングによって変化する
+
+### tryLock()によるロック取得
+
+`tryLock()`は、ロックの取得を試み、取得できたかどうかを`boolean`で返すメソッド。
+
+**基本構文**
+
+```java
+if (lock.tryLock()) {
+
+    try {
+        System.out.println("ロック取得成功");
+    } finally {
+        lock.unlock();
+    }
+
+} else {
+    System.out.println("ロック取得失敗");
+}
+```
+
+**重要なポイント**
+
+- ロックを取得できた場合は`true`
+- ロックを取得できなかった場合は`false`
+- 引数なしの`tryLock()`は、取得できなくてもロック解放を待ち続けない
+- ロック取得に成功した場合だけ`unlock()`する
+- 他の処理へ進みたい場合や、ロック取得に失敗した場合の処理を分けたいときに利用できる
+
+### 時間制限付きtryLock()
+
+`tryLock(long time, TimeUnit unit)`を使用すると、ロックの取得待ちに時間制限を設定できる。
+
+**コード例**
+
+```java
+import java.util.concurrent.TimeUnit;
+
+boolean acquired =
+        lock.tryLock(1, TimeUnit.SECONDS);
+
+if (acquired) {
+
+    try {
+        System.out.println("ロック取得成功");
+    } finally {
+        lock.unlock();
+    }
+
+} else {
+    System.out.println("タイムアウト");
+}
+```
+
+※ このコードは`InterruptedException`を処理または宣言する必要がある。
+
+**重要なポイント**
+
+- 指定時間内にロックを取得できれば`true`
+- 指定時間内に取得できなければ`false`
+- 待機中に割り込みを受けた場合、`InterruptedException`が発生する
+- ロックを取得できなかった場合は`unlock()`しない
+
+### 公平ロック（Fair Lock）
+
+`ReentrantLock`では、公平性を考慮したロックを生成できる。
+
+**非公平ロック**
+
+```java
+ReentrantLock lock = new ReentrantLock();
+```
+
+**公平ロック**
+
+```java
+ReentrantLock lock = new ReentrantLock(true);
+```
+
+**公平ロックと非公平ロックの比較**
+
+| 比較項目 | 非公平ロック | 公平ロック |
+| --- | --- | --- |
+| 生成方法 | `new ReentrantLock()` | `new ReentrantLock(true)` |
+| 基本方針 | 待機順序を優先しない | 長く待機しているスレッドを優先する |
+| スループット | 比較的高くなりやすい | 低下する場合がある |
+| 待機順序 | 保証されない | 公平性を考慮する |
+
+**重要なポイント**
+
+- 公平ロックは、長く待っているスレッドを優先するように設計されている
+- すべてのスレッドの実行順序が完全に保証されるわけではない
+- 公平性の管理によって処理性能が低下する場合がある
+- 引数なしの`tryLock()`は、公平ロックでも公平性を考慮せずに取得できる場合がある
+- 公平性と処理性能のバランスを考えて選択する
+
+### ReentrantLockの待機中断
+
+`ReentrantLock`では、ロック取得待ちの間に割り込みを処理する方法を選択できる。
+
+**lock()**
+
+- ロックを取得できるまで待機する
+- 待機中に割り込みが発生しても、割り込みだけを理由にロック取得待ちを終了しない
+- ロック取得待ちで`InterruptedException`をスローしない
+- 割り込み状態は保持される
+
+**lockInterruptibly()**
+
+- ロックを取得できるまで待機する
+- 割り込みを受けた場合、ロック取得待ちを中断できる
+- 割り込みによって`InterruptedException`が発生する
+- `InterruptedException`が発生すると、割り込みフラグは通常クリアされる
+
+### lockInterruptibly()の使用方法
+
+**コード例**
+
+```java
+import java.util.concurrent.locks.ReentrantLock;
+
+public class LockInterruptMain {
+
+    public static void main(String[] args)
+            throws InterruptedException {
+
+        ReentrantLock lock = new ReentrantLock();
+
+        lock.lock();
+
+        Thread worker = new Thread(() -> {
+
+            try {
+                System.out.println("ロック取得待機");
+
+                lock.lockInterruptibly();
+
+                try {
+                    System.out.println("ロック取得成功");
+                } finally {
+                    lock.unlock();
+                }
+
+            } catch (InterruptedException e) {
+
+                System.out.println("割り込み発生");
+
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        try {
+            worker.start();
+
+            Thread.sleep(1000);
+
+            worker.interrupt();
+        } finally {
+            lock.unlock();
+        }
+
+        worker.join();
+    }
+}
+```
+
+**出力例**
+
+```text
+ロック取得待機
+割り込み発生
+```
+
+**処理の流れ**
+
+1. `main`スレッドがロックを取得する
+2. `worker`スレッドを開始する
+3. `worker`が`lockInterruptibly()`を呼び出す
+4. `main`がロックを保持しているため、`worker`は待機する
+5. `main`が`worker.interrupt()`を呼び出す
+6. `worker`に`InterruptedException`が発生する
+7. `worker`はロックを取得せずに待機を終了する
+8. `catch`ブロックで割り込みを処理する
+9. `main`が保持していたロックを解放する
+
+**重要なポイント**
+
+- `lockInterruptibly()`は、割り込み可能なロック取得方法
+- 割り込みによって待機を中断できる
+- ロック取得に失敗した場合は`unlock()`してはいけない
+- ロック取得後に例外が発生する場合に備え、`try-finally`で解放する
+- `InterruptedException`の処理方針に応じて、必要なら割り込み状態を復元する
+
+### lock()とlockInterruptibly()の違い
+
+| 比較項目 | `lock()` | `lockInterruptibly()` |
+| --- | --- | --- |
+| 主な目的 | ロック取得 | 割り込み可能なロック取得 |
+| ロック取得待機 | する | する |
+| 割り込みによる待機中断 | しない | できる |
+| `InterruptedException` | スローしない | スローする |
+| 割り込みフラグ | 割り込み状態を保持 | 例外発生時にクリア |
+| 使用場面 | 通常の排他制御 | キャンセル可能な待機処理 |
+
+**重要なポイント**
+
+`lock()`に対して割り込みを送信しても、ロック取得待ちを中断することはできない。
+
+一方、`lockInterruptibly()`を使用すると、ロックの取得待ちを中断できる。
+
+この違いは、スレッドの終了要求に応答できる設計を考える際に重要となる。
+
+### synchronizedとReentrantLockの違い
+
+| 比較項目 | `synchronized` | `ReentrantLock` |
+| --- | --- | --- |
+| ロックの種類 | モニターロック | 明示的なLockオブジェクト |
+| ロック取得 | 自動 | `lock()`など |
+| ロック解放 | 自動 | `unlock()` |
+| 再入可能 | 可能 | 可能 |
+| ロック取得待ち | `BLOCKED` | 通常`WAITING`など |
+| 待機中の割り込み | モニター取得待ちは中断できない | `lockInterruptibly()`で中断可能 |
+| ロック取得の試行 | 直接的な仕組みはない | `tryLock()` |
+| 取得タイムアウト | 直接指定できない | 時間指定`tryLock()` |
+| 公平性の設定 | できない | 可能 |
+| 基本的な特徴 | 記述が簡潔 | 柔軟な制御が可能 |
+
+**synchronizedの例**
+
+```java
+public synchronized void increment() {
+    count++;
+}
+```
+
+**ReentrantLockの例**
+
+```java
+lock.lock();
+
+try {
+    count++;
+} finally {
+    lock.unlock();
+}
+```
+
+**重要なポイント**
+
+- どちらも共有データへの排他制御に使用できる
+- 適切なロックの取得と解放によってメモリ可視性も保証される
+- `synchronized`はロックの解放が自動的に行われる
+- `ReentrantLock`ではロックを明示的に管理する
+- `ReentrantLock`は、割り込みやタイムアウトなどの柔軟な制御が必要な場合に利用できる
+- 共有データを保護するためには、複数のスレッドが同じロックを使用することが重要
+
+### LockSupportとReentrantLockの違い
+
+`LockSupport`と`ReentrantLock`は、名前が似ていても役割が異なる。
+
+| 比較項目 | LockSupport | ReentrantLock |
+| --- | --- | --- |
+| 主な目的 | スレッドの待機と再開 | 排他制御 |
+| 主なメソッド | `park()`、`unpark()` | `lock()`、`unlock()` |
+| 共有データの保護 | 自動的には行わない | 適切に使用すれば可能 |
+| 待機制御 | 直接制御する | ロック取得に応じて制御する |
+| 主な用途 | 同期機構の構築など | 臨界領域の保護 |
+
+**重要なポイント**
+
+- `LockSupport`はスレッドを待機させるための低レベルな仕組み
+- `ReentrantLock`は共有データを安全に操作するためのロック
+- `ReentrantLock`の内部では、`LockSupport`などを利用した待機処理が使用される
+- `LockSupport`を使用しただけでは、`count++`などの競合状態は防止できない
+
+### 高度な同期処理を使用する際の注意事項
+
+- 同期処理が必要かどうかは、共有データへのアクセス状況を確認して判断する
+- `LockSupport`は排他制御そのものを提供するわけではない
+- `park()`から復帰しても、待機条件が成立したとは限らない
+- 許可証はスレッドごとに最大1つしか保持されない
+- `ReentrantLock`ではロックの解放を忘れないようにする
+- `unlock()`はロックを保持しているスレッドが実行する
+- ロック取得に成功した場合だけ`unlock()`を実行する
+- `try-finally`を使用して、例外発生時のロック解放を保証する
+- `lock()`では待機中の割り込みによってロック取得を中断できない
+- `lockInterruptibly()`では待機中の割り込みに対応できる
+- 複数のロックを異なる順序で取得すると、デッドロックが発生する可能性がある
+- 必要以上にロックを保持すると、スレッドの待機時間が増加する可能性がある
+
+### 高度な同期処理 - concurrent.Lockのまとめ
+
+- Javaには`synchronized`以外にも高度な同期処理を実現する仕組みがある
+- `LockSupport`はスレッドの待機と再開を制御するクラス
+- `park()`は現在のスレッドを待機させる
+- `unpark()`は指定したスレッドに許可証を与える
+- 許可証はスレッドごとに最大1つ保持される
+- `unpark()`を`park()`より先に実行することもできる
+- `park()`は割り込みなどでも復帰する可能性がある
+- `park()`による割り込みからの復帰では、割り込みフラグはクリアされない
+- `ReentrantLock`は明示的なロック取得・解放によって排他制御を実現する
+- `ReentrantLock`は再入可能なロックである
+- `lock()`でロックを取得し、`unlock()`で解放する
+- `try-finally`を使用して、確実にロックを解放することが重要
+- `tryLock()`を使用すると、ロック取得に失敗した場合の処理を分けられる
+- 時間指定の`tryLock()`によって、取得待ちにタイムアウトを設定できる
+- 公平ロックでは、長く待機しているスレッドの取得を優先する
+- `lock()`では割り込みによってロック取得待ちを中断しない
+- `lockInterruptibly()`では、割り込みによってロック取得待ちを中断できる
+- `synchronized`と`ReentrantLock`は、どちらも排他制御とメモリ可視性を確保できる
+- `LockSupport`と`ReentrantLock`は、待機制御と排他制御という異なる役割を持つ
+- 高度な同期処理を理解することは、生産者・消費者問題や並行処理コレクションの学習につながる
