@@ -12,7 +12,13 @@ public class BoundedMain {
 		// 1. BoundedQueue　選択
 		//BoundedQueue queue = new BoundedQueueV1(2);
 		//BoundedQueue queue = new BoundedQueueV2(2);
-		BoundedQueue queue = new BoundedQueueV3(2);
+		//BoundedQueue queue = new BoundedQueueV3(2);
+		//BoundedQueue queue = new BoundedQueueV4(2);
+		//BoundedQueue queue = new BoundedQueueV5(2);
+		//BoundedQueue queue = new BoundedQueueV6_1(2);
+		//BoundedQueue queue = new BoundedQueueV6_2(2);
+		//BoundedQueue queue = new BoundedQueueV6_3(2);
+		BoundedQueue queue = new BoundedQueueV6_4(2);
 
 		// 2. 生産者、消費者実行順序選択、必ず一つの未選択
 		produceFirst(queue);	//生産者優先実行

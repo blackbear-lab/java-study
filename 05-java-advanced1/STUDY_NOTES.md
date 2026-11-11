@@ -12,7 +12,7 @@ Javaのマルチスレッドと並行処理について学習します。
 - [x] 同期処理 - synchronized
 - [x] 高度な同期処理 - concurrent.Lock
 - [x] 生産者・消費者問題1
-- [ ] 生産者・消費者問題2
+- [x] 生産者・消費者問題2
 - [ ] CAS - 同期処理とアトミック操作
 - [ ] 並行処理コレクション
 - [ ] スレッドプールとExecutorフレームワーク1
@@ -5171,3 +5171,285 @@ while (queue.isEmpty()) {
 - `notify()`だけでは、すべての待機問題を解決できない
 - `synchronized`による排他制御と、`wait()`・`notify()`による協調動作を組み合わせることが重要
 - 生産者・消費者問題を通して、マルチスレッド環境における共有データの管理とスレッド間の待機・通知について理解を深めた
+
+
+## 9. 生産者・消費者問題2
+
+### LockとCondition
+
+- `Condition`は、スレッドの待機と通知を制御するためのインターフェース
+- `java.util.concurrent.locks`パッケージに属する
+- `ReentrantLock`などの`Lock`と組み合わせて使用する
+- `newCondition()`を使用して`Condition`を生成する
+- 一つの`Lock`から複数の`Condition`を生成できる
+- `Condition`を使用することで、待機するスレッドを種類ごとに分離できる
+
+### Conditionの主なメソッド
+
+| メソッド | 説明 |
+| --- | --- |
+| `await()` | ロックを解放して待機する |
+| `signal()` | 待機中のスレッドを一つ通知する |
+| `signalAll()` | 待機中のすべてのスレッドに通知する |
+| `awaitNanos()` | 時間制限付きで待機する |
+
+**重要なポイント**
+
+- `await()`を呼び出すには、対応するロックを保持している必要がある
+- `await()`はロックを解放してスレッドを待機させる
+- 通知を受けたスレッドは、ロックを再取得してから処理を再開する
+- `signal()`を実行しても、通知されたスレッドがすぐに処理を再開するとは限らない
+- `await()`は予期しない理由で復帰することもあるため、`while`で条件を再確認する
+
+### 例題4 - Conditionによる待機と通知
+
+```java
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+
+public class ConditionExample {
+
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition condition = lock.newCondition();
+    private boolean ready = false;
+
+    public void awaitReady() throws InterruptedException {
+        lock.lock();
+        try {
+            while (!ready) {
+                condition.await();
+            }
+            System.out.println("処理再開");
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public void signalReady() {
+        lock.lock();
+        try {
+            ready = true;
+            condition.signalAll();
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+```
+
+**処理の流れ**
+
+1. スレッドがロックを取得する
+2. `ready`が`false`の場合、`await()`で待機する
+3. `await()`によってロックが解放される
+4. 別のスレッドがロックを取得する
+5. `ready`を`true`に変更する
+6. `signalAll()`で待機中のスレッドに通知する
+7. 通知されたスレッドがロックを再取得する
+8. `while`で条件を再確認し、処理を再開する
+
+### Object.wait()とCondition.await()の違い
+
+| 比較項目 | Object.wait() | Condition.await() |
+| --- | --- | --- |
+| 使用するロック | モニターロック | Lock |
+| 待機 | `wait()` | `await()` |
+| 一つの通知 | `notify()` | `signal()` |
+| 全体への通知 | `notifyAll()` | `signalAll()` |
+| ロック解放 | 対象モニターを解放 | 対応するLockを解放 |
+| 待機空間 | オブジェクトごとに一つ | 複数生成可能 |
+
+### 生産者・消費者の待機空間分離
+
+従来の`wait()`と`notify()`では、生産者と消費者が同じ待機空間を使用する。
+
+そのため、通知するスレッドを適切に選択できない場合がある。
+
+`Condition`を使用すると、生産者と消費者の待機空間を分離できる。
+
+**基本構造**
+
+```java
+private final ReentrantLock lock = new ReentrantLock();
+
+private final Condition producerCondition = lock.newCondition();
+private final Condition consumerCondition = lock.newCondition();
+```
+
+- `producerCondition`：キューが満杯の場合に生産者が待機する
+- `consumerCondition`：キューが空の場合に消費者が待機する
+- 生産者がデータを追加した場合、消費者に通知する
+- 消費者がデータを取り出した場合、生産者に通知する
+- 同じロックで共有キューへのアクセスを保護する
+
+### 例題5 - Conditionによる待機空間の分離
+
+**学習用コード例**
+
+```java
+import java.util.ArrayDeque;
+import java.util.Queue;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+
+public class BoundedQueueExample {
+
+    private final Queue<String> queue = new ArrayDeque<>();
+    private final int max;
+
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition producerCondition = lock.newCondition();
+    private final Condition consumerCondition = lock.newCondition();
+
+    public BoundedQueueExample(int max) {
+        this.max = max;
+    }
+
+    public void put(String data) throws InterruptedException {
+        lock.lockInterruptibly();
+        try {
+            while (queue.size() == max) {
+                producerCondition.await();
+            }
+
+            queue.offer(data);
+            consumerCondition.signal();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public String take() throws InterruptedException {
+        lock.lockInterruptibly();
+        try {
+            while (queue.isEmpty()) {
+                consumerCondition.await();
+            }
+
+            String data = queue.poll();
+            producerCondition.signal();
+            return data;
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+```
+
+**重要なポイント**
+
+- 一つのロックで共有キューを保護する
+- 二つの`Condition`で待機空間を分離する
+- `await()`中はロックが解放される
+- 通知を受けても、条件が成立しているか再確認する
+- `try-finally`でロックを確実に解放する
+- `lockInterruptibly()`はロック取得待ちの割り込みに対応できる
+
+### スレッドの待機方法の比較
+
+| メソッド | ロックの解放 | 主な状態 |
+| --- | --- | --- |
+| `Thread.sleep()` | しない | TIMED_WAITING |
+| `Object.wait()` | 対象モニターを解放 | WAITING |
+| `Condition.await()` | 対応するLockを解放 | WAITING |
+| `LockSupport.park()` | 自動解放しない | WAITING |
+
+### BlockingQueueの基本概念
+
+`BlockingQueue<E>`は、複数のスレッドから安全に利用できるキューのインターフェース。
+
+- `java.util.concurrent`パッケージに属する
+- スレッド間でデータを安全に受け渡すために使用する
+- キューが満杯の場合、生産者を待機させられる
+- キューが空の場合、消費者を待機させられる
+- ロックや待機・通知の仕組みが内部に実装されている
+- `ArrayBlockingQueue`は容量固定の代表的な実装クラス
+
+### 例題6 - BlockingQueue
+
+**学習用コード例**
+
+```java
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+
+public class BlockingQueueExample {
+
+    public static void main(String[] args) throws InterruptedException {
+
+        BlockingQueue<String> queue = new ArrayBlockingQueue<>(2);
+
+        Thread producer = new Thread(() -> {
+            try {
+                queue.put("A");
+                queue.put("B");
+                queue.put("C");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        Thread consumer = new Thread(() -> {
+            try {
+                System.out.println(queue.take());
+                System.out.println(queue.take());
+                System.out.println(queue.take());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        producer.start();
+        consumer.start();
+
+        producer.join();
+        consumer.join();
+    }
+}
+```
+
+**処理の流れ**
+
+1. 容量2の`ArrayBlockingQueue`を生成する
+2. 生産者がデータをキューに追加する
+3. キューが満杯の場合、`put()`で待機する
+4. 消費者が`take()`でデータを取り出す
+5. 空きができると、生産者は追加処理を進められる
+6. キューが空の場合、消費者は要素が追加されるまで待機する
+
+### BlockingQueueの主なメソッド
+
+| 操作 | メソッド | 特徴 |
+| --- | --- | --- |
+| 追加 | `add(e)` | 追加できなければ例外 |
+| 追加 | `offer(e)` | 追加できなければfalse |
+| 追加 | `put(e)` | 空きができるまで待機 |
+| 取得・削除 | `remove()` | 空なら例外 |
+| 取得・削除 | `poll()` | 空ならnull |
+| 取得・削除 | `take()` | 要素ができるまで待機 |
+| 参照 | `peek()` | 先頭要素を参照し、空ならnull |
+
+**時間制限付きメソッド**
+
+- `offer(e, timeout, unit)`：指定時間内に追加を試みる
+- `poll(timeout, unit)`：指定時間内に要素の取得を試みる
+
+### BlockingQueueを使用するメリット
+
+- 自分でロック制御を実装する必要がない
+- 待機・通知の仕組みが用意されている
+- スレッド間のデータ受け渡しを安全に行える
+- 競合状態や通知ミスなどの問題を防ぎやすい
+- 生産者・消費者の業務処理に集中できる
+
+### 生産者・消費者問題2のまとめ
+
+- `Condition`は`Lock`と組み合わせて使用する
+- `await()`はロックを解放して待機する
+- `signal()`と`signalAll()`で待機中のスレッドに通知する
+- `Condition`を複数作成することで待機空間を分離できる
+- 生産者と消費者に適切な通知を送れる
+- `await()`から復帰した場合も`while`で条件を再確認する
+- `BlockingQueue`はスレッドセーフなキューを提供する
+- `put()`と`take()`によって必要な待機処理を実現できる
+- 実際の開発では、標準の並行処理ライブラリを活用することが重要
