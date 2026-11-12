@@ -13,7 +13,7 @@ Javaのマルチスレッドと並行処理について学習します。
 - [x] 高度な同期処理 - concurrent.Lock
 - [x] 生産者・消費者問題1
 - [x] 生産者・消費者問題2
-- [ ] CAS - 同期処理とアトミック操作
+- [x] CAS - 同期処理とアトミック操作
 - [ ] 並行処理コレクション
 - [ ] スレッドプールとExecutorフレームワーク1
 - [ ] スレッドプールとExecutorフレームワーク2
@@ -5453,3 +5453,323 @@ public class BlockingQueueExample {
 - `BlockingQueue`はスレッドセーフなキューを提供する
 - `put()`と`take()`によって必要な待機処理を実現できる
 - 実際の開発では、標準の並行処理ライブラリを活用することが重要
+
+## 10. CAS - 同期処理とアトミック操作
+
+### 学習した講義
+
+| 講義 | 内容 |
+| --- | --- |
+| 77 | 原子的操作 - 紹介 |
+| 78 | 原子的操作 - 開始 |
+| 79 | 原子的操作 - volatile、synchronized |
+| 80 | 原子的操作 - AtomicInteger |
+| 81 | 原子的操作 - 性能テスト |
+| 82 | CAS演算1 |
+| 83 | CAS演算2 |
+| 84 | CAS演算3 |
+| 85 | CASロック実装1 |
+| 86 | CASロック実装2 |
+| 87 | まとめ |
+
+※ 以下のコードは、講義一覧のテーマに沿って整理した学習用コード例。
+
+### 原子的操作（Atomic Operation）の基本概念
+
+- 原子的操作は、他のスレッドから見て途中の状態が観測されない、一つの不可分な操作
+- Javaのソースコードで1行に書かれていても、原子的操作とは限らない
+- `count++`は値の読み取り、加算、結果の書き込みで構成される
+- 複数のスレッドが同じ値を読み取ると、一方の更新が失われる場合がある
+- 可視性は変更が他のスレッドに伝わる性質であり、原子性とは区別する必要がある
+
+**更新が失われる例**
+
+| 順序 | スレッドA | スレッドB | 共有値 |
+| --- | --- | --- | --- |
+| 1 | 0を読み取る | | 0 |
+| 2 | | 0を読み取る | 0 |
+| 3 | 1を書き込む | | 1 |
+| 4 | | 1を書き込む | 1 |
+
+- 2回加算しても、結果が2ではなく1になる可能性がある
+- 実行のたびに問題が再現するとは限らず、正しい結果が出たことだけでは安全性を判断できない
+
+### volatileとsynchronizedの比較
+
+```java
+class VolatileCounter {
+    private volatile int value;
+
+    public void increment() {
+        value++; // 可視性は確保されるが、複合操作は原子的ではない
+    }
+}
+
+class SynchronizedCounter {
+    private int value;
+
+    public synchronized void increment() {
+        value++;
+    }
+
+    public synchronized int get() {
+        return value;
+    }
+}
+```
+
+- `volatile`は読み書きの可視性と順序性を保証するが、排他制御は行わない
+- `synchronized`は同じモニターで保護した処理を排他的に実行する
+- 同じモニターの解放と、その後の取得によって、共有データの可視性も確保できる
+- 共有データを保護するすべてのアクセスで、同期方法を統一する必要がある
+
+### AtomicIntegerの基本概念
+
+- `AtomicInteger`は、整数値を原子的に更新するためのクラス
+- `java.util.concurrent.atomic`パッケージに属する
+- 単一のカウンターなど、値の更新を安全に実行したい場合に利用できる
+- 個々のメソッドが原子的でも、複数の呼び出し全体が自動的に原子的になるわけではない
+
+| メソッド | 説明 |
+| --- | --- |
+| `get()` | 現在値を取得 |
+| `set(value)` | 値を設定 |
+| `incrementAndGet()` | 1増加させ、更新後の値を返す |
+| `getAndIncrement()` | 1増加させ、更新前の値を返す |
+| `decrementAndGet()` | 1減少させ、更新後の値を返す |
+| `addAndGet(delta)` | 指定値を加算し、更新後の値を返す |
+| `compareAndSet(expected, update)` | 現在値が期待値と一致した場合に更新 |
+
+**コード例**
+
+```java
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class AtomicCounterMain {
+    public static void main(String[] args) throws InterruptedException {
+        AtomicInteger counter = new AtomicInteger();
+        Runnable task = () -> {
+            for (int i = 0; i < 100_000; i++) {
+                counter.incrementAndGet();
+            }
+        };
+
+        Thread thread1 = new Thread(task);
+        Thread thread2 = new Thread(task);
+        thread1.start();
+        thread2.start();
+        thread1.join();
+        thread2.join();
+
+        System.out.println(counter.get());
+    }
+}
+```
+
+**出力例**
+
+```text
+200000
+```
+
+- 同じ`AtomicInteger`を共有し、各加算を原子的に実行する
+- `join()`によって、両方のスレッドが終了してから結果を確認する
+- `counter.set(counter.get() + 1)`では、取得から設定までの間に別の更新が入り得るため、代用できない
+
+### 原子的操作の性能テスト
+
+| 方法 | 加算の原子性 | 比較時のポイント |
+| --- | --- | --- |
+| 通常の`int`で`value++` | 保証しない | 高速でも更新が失われる可能性がある |
+| `volatile int`で`value++` | 保証しない | 可視性を確保しても競合は解消しない |
+| `synchronized`で保護した加算 | 保証する | ロック競合や待機などの影響を受ける |
+| `AtomicInteger`の加算 | 保証する | 競合やキャッシュの共有による影響を受ける |
+
+**測定の流れ**
+
+1. 各方式で同じスレッド数と加算回数を設定する
+2. カウンターを初期化し、可能な限り開始条件をそろえる
+3. `System.nanoTime()`の差で経過時間を測定する
+4. 全スレッドの終了を待ち、期待値と実際の値を比較する
+5. ウォームアップ後に複数回測定し、結果のばらつきを確認する
+
+- 単一スレッドと複数スレッドでは、競合の有無が異なる
+- スレッドの生成・開始時間を含むかどうかも、測定条件として明確にする
+- 測定対象のループ内でログを出すと、出力処理が結果を大きく変える
+- JITコンパイルやGC、CPUコア数、OSのスケジューリングによって結果は変化する
+- 正確性を満たさない方式を、実用上優れた方式として評価しない
+- `AtomicInteger`が常に`synchronized`より高速になるとは限らない
+- 厳密なマイクロベンチマークでは、JMHなどの専用ツールを利用する
+
+### CAS演算1 - 比較と更新
+
+CAS（Compare-And-Swap）は、現在値と期待値を比較し、一致した場合だけ新しい値に更新する仕組み。
+
+- 比較と更新を一つの原子的操作として実行する
+- CPUの原子的命令などを利用し、JVMがこの操作を実現する
+- Javaでは`compareAndSet()`を利用して、条件付きの原子的更新を行える
+- 通常の`if`による比較と代入を並べても、同じ保証は得られない
+
+```java
+AtomicInteger value = new AtomicInteger(10);
+
+boolean success1 = value.compareAndSet(10, 20);
+boolean success2 = value.compareAndSet(10, 30);
+
+System.out.println(success1); // true
+System.out.println(success2); // false
+System.out.println(value.get()); // 20
+```
+
+- 1回目は現在値10と期待値10が一致するため、20に更新される
+- 2回目は現在値20と期待値10が一致しないため、更新されない
+- `true`はその更新が成功したことを示すが、直後も値が変わらないことまでは保証しない
+
+### CAS演算2 - 競合と再試行
+
+| 順序 | スレッドA | スレッドB | 共有値 |
+| --- | --- | --- | --- |
+| 1 | 0を取得 | 0を取得 | 0 |
+| 2 | CAS(0, 1)に成功 | | 1 |
+| 3 | | CAS(0, 1)に失敗 | 1 |
+| 4 | | 1を取得し直す | 1 |
+| 5 | | CAS(1, 2)に成功 | 2 |
+
+- 他のスレッドが先に更新すると、古い期待値によるCASは失敗する
+- 失敗した場合は最新値を読み直し、新しい更新値を計算して再試行する
+- 読み取りから計算までを排他制御するのではなく、更新時に期待値との一致を検証する
+
+### CAS演算3 - CASループによる加算
+
+**学習用コード例**
+
+```java
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class CasCounter {
+    private final AtomicInteger value = new AtomicInteger();
+
+    public int incrementAndGet() {
+        int current;
+        int next;
+        do {
+            current = value.get();
+            next = current + 1;
+        } while (!value.compareAndSet(current, next));
+        return next;
+    }
+
+    public int get() {
+        return value.get();
+    }
+}
+```
+
+- CASに成功するまで、読み取り・計算・条件付き更新を繰り返す
+- 成功したCASが、この加算処理の確定点になる
+- ロックを保持するスレッドの解放を待たずに、値の更新を試みられる
+- 競合が多い場合、特定のスレッドが何度も失敗し、完了まで時間がかかる場合がある
+- 標準APIの`incrementAndGet()`の内部が、このコードと常に同じとは限らない
+- 複数の変数にまたがる整合性は、一つの`AtomicInteger`だけでは保証できない
+
+### ビジーウェイト（Busy Waiting）
+
+- 条件が成立するまで繰り返し確認しながら待つ方法
+- CASの再試行や、スピンロックの取得待ちで見られる
+- スレッドを休止させず、実行可能な状態でCPU時間を消費する
+- 短い待機では、休止・再開のコストを避けられる場合がある
+- 待機が長い場合や競合が多い場合は、CPUを浪費する可能性がある
+- `Thread.onSpinWait()`はスピン中であることを実行環境に伝えるヒントであり、待機状態への移行や公平性を保証しない
+- CASによる更新の再試行と、他者が保持するロックの解放待ちは、区別して考える必要がある
+
+### CASロック実装1 - フラグによる排他制御の問題
+
+**問題のあるコード例**
+
+```java
+private volatile boolean locked;
+
+public void lock() {
+    while (locked) {
+        Thread.onSpinWait();
+    }
+    locked = true;
+}
+```
+
+- `volatile`で変更を観測できても、確認と更新は別々の操作
+- 複数のスレッドが同時に`false`を確認すると、両方が`true`を書き込んで臨界領域に入る可能性がある
+- ロック取得では、「未取得かの確認」と「取得済みへの変更」を原子的に実行する必要がある
+
+### CASロック実装2 - AtomicBooleanによるスピンロック
+
+**学習用コード例（Java 9以降）**
+
+```java
+import java.util.concurrent.atomic.AtomicBoolean;
+
+public class CasSpinLock {
+    private final AtomicBoolean locked = new AtomicBoolean();
+
+    public void lock() {
+        while (!locked.compareAndSet(false, true)) {
+            Thread.onSpinWait();
+        }
+    }
+
+    public void unlock() {
+        locked.set(false);
+    }
+}
+```
+
+**使用例**
+
+```java
+// すべてのアクセスで同じlockを共有する
+lock.lock();
+try {
+    // 共有データを操作する臨界領域
+} finally {
+    lock.unlock();
+}
+```
+
+- `false`から`true`へのCASに成功したスレッドだけがロックを取得する
+- 失敗したスレッドは、解放されるまで取得を繰り返し試みる
+- `set(false)`による解放と、その後の取得で使用するアトミック操作は、保護するデータの可視性にも関係する
+- 同じスレッドが再び`lock()`すると待ち続けるため、再入可能なロックではない
+- 所有者を管理しないため、他のスレッドによる不正な`unlock()`を検出できない
+- 公平性、取得タイムアウト、割り込みによる待機中断は実装していない
+- CASを使用していても、このロックは保持者の解放に依存するため、ロックフリーなアルゴリズムではない
+- 実際の開発では、必要な機能を備えた`synchronized`や`ReentrantLock`などを優先して検討する
+
+### CASとロックの性能比較
+
+| 方法 | 競合時の動作 | 適した場面・注意点 |
+| --- | --- | --- |
+| CASによる値の更新 | 更新失敗時に再試行できる | 単一の値に対する短い更新に適する |
+| 自作スピンロック | 取得できるまでCPUを使って試行 | 長い臨界領域や高競合ではCPU消費が増える |
+| `synchronized` | JVMがロック取得と待機を管理 | 複数の操作をまとめて保護できる |
+| `ReentrantLock` | 取得できなければ必要に応じて待機 | 割り込み、タイムアウト、Conditionなどを利用できる |
+
+- 標準ロックの内部でも、実装や状況によってCASや短いスピンが使われる場合がある
+- 「CASは必ず速い」「ロックは必ずコンテキストスイッチを起こす」とは判断しない
+- 競合の程度、臨界領域の長さ、スレッド数とCPUコア数を考慮する
+- 性能だけでなく、正確性、CPU使用率、応答時間、保守性も比較する
+- 今回の資料には実測結果がないため、特定の処理時間や性能順位は記録しない
+
+### CAS - 同期処理とアトミック操作のまとめ
+
+- `count++`は複合操作であり、`volatile`だけでは原子性を保証できない
+- `AtomicInteger`を利用すると、整数の加算などを原子的に実行できる
+- `compareAndSet()`は、期待値の比較と更新を原子的に実行する
+- CASに失敗した場合は、必要に応じて最新値を取得して再試行する
+- ビジーウェイトはCPUを使用するため、競合や待機時間によって効率が変わる
+- CASでスピンロックを実装できるが、実用的なロックには追加の機能や検証が必要になる
+- 単一の値の更新と、複数の操作をまとめて保護する処理では、適切な同期方法が異なる
+- 性能比較では結果の正確性を確認し、測定条件と実行環境をそろえる
+
+**参考資料**
+
+- [Java公式API - AtomicInteger](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/util/concurrent/atomic/AtomicInteger.html)
