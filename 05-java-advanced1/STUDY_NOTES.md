@@ -14,7 +14,7 @@ Javaのマルチスレッドと並行処理について学習します。
 - [x] 生産者・消費者問題1
 - [x] 生産者・消費者問題2
 - [x] CAS - 同期処理とアトミック操作
-- [ ] 並行処理コレクション
+- [x] 並行処理コレクション
 - [ ] スレッドプールとExecutorフレームワーク1
 - [ ] スレッドプールとExecutorフレームワーク2
 
@@ -5773,3 +5773,275 @@ try {
 **参考資料**
 
 - [Java公式API - AtomicInteger](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/util/concurrent/atomic/AtomicInteger.html)
+
+## 11. 並行処理コレクション
+
+### 学習した講義
+
+| 講義 | 内容 |
+| --- | --- |
+| 88 | 並行処理コレクションが必要な理由1 - 開始 |
+| 89 | 並行処理コレクションが必要な理由2 - 同時実行問題 |
+| 90 | 並行処理コレクションが必要な理由3 - 同期処理 |
+| 91 | 並行処理コレクションが必要な理由4 - プロキシの導入 |
+| 92 | Javaの並行処理コレクション1 - synchronized |
+| 93 | Javaの並行処理コレクション2 - 並行処理コレクション |
+
+※ 講座のセクション12に対応。以下のコードは、講義一覧のテーマに沿って整理した学習用コード例であり、講義のソースコードをそのまま再現したものではない。
+
+### 並行処理コレクションが必要な理由1 - 開始
+
+- `ArrayList`、`HashSet`、`HashMap`などは、通常、内部の変更を自動的に同期しない
+- 複数のスレッドで共有し、少なくとも一つが変更する場合は、適切な同期が必要になる
+- 要素の格納、要素数の更新、容量の拡張などを含む整合性を維持する必要がある
+
+**学習用コード例 - 同期していないリスト**
+
+```java
+interface SimpleList {
+    void add(Object value);
+    int size();
+}
+
+class BasicList implements SimpleList {
+    private final Object[] elements = new Object[1000];
+    private int size;
+
+    public void add(Object value) {
+        elements[size] = value;
+        size++;
+    }
+
+    public int size() {
+        return size;
+    }
+}
+```
+
+- 配列への格納と`size`の更新は、一つの原子的操作ではない
+- 説明のため容量拡張と境界チェックを省略している
+- 実際の`ArrayList`の内部実装をそのまま表すコードではない
+
+### 並行処理コレクションが必要な理由2 - 同時実行問題
+
+| 順序 | スレッドA | スレッドB |
+| --- | --- | --- |
+| 1 | 格納先としてsize = 0を読む | |
+| 2 | | 格納先としてsize = 0を読む |
+| 3 | elements[0]にAを格納 | |
+| 4 | | elements[0]にBを格納 |
+| 5 | sizeを更新 | sizeを更新 |
+
+- 同じ位置に書き込むと、一方の要素が上書きされる
+- `size++`でも競合が発生し、要素数の更新が失われる可能性がある
+- 要素数が正しくても、格納した内容まで正しいとは限らない
+- `size`だけを`volatile`や`AtomicInteger`に変更しても、リスト全体の整合性は自動的には保証されない
+- 問題が毎回再現するとは限らず、一度正しく動いたことだけでは安全性を判断できない
+- `sleep()`は実行タイミングを変えるが、排他制御や可視性を保証しない
+
+### 並行処理コレクションが必要な理由3 - 同期処理
+
+```java
+class SynchronizedBasicList implements SimpleList {
+    private final Object[] elements = new Object[1000];
+    private int size;
+
+    public synchronized void add(Object value) {
+        elements[size] = value;
+        size++;
+    }
+
+    public synchronized int size() {
+        return size;
+    }
+}
+```
+
+- 同じインスタンスのモニターで、格納先の確認から要素数の更新までを保護する
+- 読み取りも同じロックを利用し、変更の可視性を確保する
+- 同じロックが必要な操作は、一度に一つのスレッドだけが実行する
+- 取得や削除を追加する場合も、同じ同期方針に従う必要がある
+- 各実装に同期処理を書くと、コードの重複や同期の追加漏れが発生しやすい
+
+### 並行処理コレクションが必要な理由4 - プロキシの導入
+
+プロキシは、同じインターフェースを実装し、実際の処理を別のオブジェクトに委譲する仕組み。
+
+```java
+class SynchronizedListProxy implements SimpleList {
+    private final SimpleList target;
+
+    public SynchronizedListProxy(SimpleList target) {
+        this.target = target;
+    }
+
+    public synchronized void add(Object value) {
+        target.add(value);
+    }
+
+    public synchronized int size() {
+        return target.size();
+    }
+}
+
+// 複数のスレッドには、この同じlistを渡す
+// SimpleList list = new SynchronizedListProxy(new BasicList());
+```
+
+- 元のクラスを変更せず、同期処理をプロキシにまとめられる
+- 呼び出し側は同じ`SimpleList`インターフェースを利用できる
+- ロックの対象はプロキシ自身であるため、同じプロキシを共有する必要がある
+- 同じ元データを別々のプロキシで包むと、ロックが分かれて競合を防げない
+- 元のオブジェクトを直接操作すると、同期処理を迂回してしまう
+
+### Javaの並行処理コレクション1 - synchronized
+
+`Collections`の同期ラッパーは、既存のコレクションを同期機能付きで扱うための仕組み。
+
+```java
+// 以下の型はjava.utilパッケージに属する
+List<String> list = Collections.synchronizedList(new ArrayList<>());
+Set<String> set = Collections.synchronizedSet(new HashSet<>());
+Map<String, Integer> map = Collections.synchronizedMap(new HashMap<>());
+```
+
+**実行可能なコード例**
+
+```java
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public class SynchronizedListMain {
+    public static void main(String[] args) throws InterruptedException {
+        List<Integer> list = Collections.synchronizedList(new ArrayList<>());
+        Runnable task = () -> {
+            for (int i = 0; i < 1000; i++) {
+                list.add(i);
+            }
+        };
+        Thread thread1 = new Thread(task);
+        Thread thread2 = new Thread(task);
+        thread1.start();
+        thread2.start();
+        thread1.join();
+        thread2.join();
+        System.out.println(list.size()); // 2000
+    }
+}
+```
+
+- 同じラッパーを共有し、各`add()`を同期して実行する
+- `join()`で全スレッドの終了を待ってから結果を確認する
+- 追加順序は保証されない
+
+### 複合操作と反復処理の注意点
+
+```java
+// contains()とadd()の間に、別の追加が入る可能性がある
+if (!list.contains("A")) {
+    list.add("A");
+}
+
+// 同期ラッパー自身をロックし、確認と追加をまとめて保護する
+synchronized (list) {
+    if (!list.contains("A")) {
+        list.add("A");
+    }
+}
+
+// 反復処理も全体を保護する
+synchronized (list) {
+    for (String value : list) {
+        System.out.println(value);
+    }
+}
+```
+
+- 個々のメソッドが安全でも、一連の処理が自動的に原子的になるわけではない
+- 同期ラッパーの`Iterator`、`Spliterator`、`Stream`による走査では、外部同期が必要になる
+- 同期マップの`keySet()`などを走査する場合は、元の同期マップをロックする
+- 関係するアクセスが同じロックに従うことが前提になる
+- `ConcurrentModificationException`は変更を必ず検出する保証ではなく、同期の代わりにはならない
+
+### Javaの並行処理コレクション2 - 並行処理コレクション
+
+| 分類 | 代表的な実装 | 主な用途・特徴 |
+| --- | --- | --- |
+| List | `CopyOnWriteArrayList` | 読み取り・走査が多く、更新が少ない用途 |
+| Set | `CopyOnWriteArraySet` | 更新が少ない集合 |
+| Map | `ConcurrentHashMap` | キーと値の並行した参照・更新 |
+| ソート済みMap | `ConcurrentSkipListMap` | キー順を維持するマップ |
+| ソート済みSet | `ConcurrentSkipListSet` | 順序を維持する集合 |
+| Queue | `ConcurrentLinkedQueue` | 非ブロッキングのFIFOキュー |
+| Deque | `ConcurrentLinkedDeque` | 両端から操作するキュー |
+| BlockingQueue | `ArrayBlockingQueue`、`LinkedBlockingQueue` | 空・満杯などの条件に応じて待機する受け渡し |
+
+- 各クラスは、ロック、CAS、コピーなど、それぞれの特性に応じた方法を利用する
+- すべてがロックフリーであるわけではない
+- 同期ラッパーより必ず高速になるとは限らず、読み取り・更新の頻度や競合状況で選択する
+
+### CopyOnWriteArrayListの使用例
+
+```java
+// import java.util.Iterator;
+// import java.util.concurrent.CopyOnWriteArrayList;
+CopyOnWriteArrayList<String> list = new CopyOnWriteArrayList<>();
+list.add("A");
+list.add("B");
+Iterator<String> iterator = list.iterator();
+list.add("C");
+while (iterator.hasNext()) {
+    System.out.println(iterator.next()); // A、B
+}
+list.addIfAbsent("C"); // 存在するため追加しない
+```
+
+- イテレーターは生成時点のスナップショットを参照し、その後の追加を反映しない
+- 更新時のコピーに時間とメモリを使うため、更新が頻繁な用途には適さない場合がある
+- イテレーターの`remove()`などによる変更はサポートされない
+- スナップショットは、要素オブジェクト自体を深くコピーするものではない
+
+### ConcurrentHashMapの使用例
+
+```java
+// import java.util.concurrent.ConcurrentHashMap;
+ConcurrentHashMap<String, Integer> counts = new ConcurrentHashMap<>();
+counts.putIfAbsent("java", 0);
+counts.merge("java", 1, Integer::sum);
+System.out.println(counts.get("java")); // 1
+```
+
+- `putIfAbsent()`は、キーが存在しない場合の追加を原子的に実行する
+- `merge()`は対象キーの値の結合・更新を原子的に実行する
+- `get()`してから`put()`する加算では、その間に別の更新が入る可能性がある
+- 対象キーの原子的更新と、マップ全体の一括したスナップショットは別の性質
+- キーにも値にも`null`を使用できない
+- `synchronized (map)`だけでは通常の並行更新を止められず、マップ全体の排他制御にはならない
+
+### 反復処理と待機動作の比較
+
+| 対象 | 動作 | 注意点 |
+| --- | --- | --- |
+| 同期ラッパー | 走査全体を外部同期で保護 | 個々のメソッドの同期だけでは不足 |
+| `CopyOnWriteArrayList` | 生成時点のスナップショットを走査 | 後からの変更を反映しない |
+| `ConcurrentHashMap`など | 弱整合性のイテレーターを提供 | 走査中の変更を反映する場合があり、全体の一時点の状態とは限らない |
+| `ConcurrentLinkedQueue` | 空の場合、`poll()`はnullを返す | 要素が来るまで待機する操作ではない |
+| `BlockingQueue` | 空の場合、`take()`は待機する | 割り込みや終了方法を設計する |
+
+### 並行処理コレクションのまとめ
+
+- 通常のコレクションを複数のスレッドで変更する場合は、適切な同期が必要
+- 整合性を維持する一連の処理を、同じロックで保護する
+- 同期プロキシは、実際の処理と同期処理を分離できる
+- 同期ラッパーを使用する場合は、同じラッパーを共有する
+- 個々の操作と、複合操作・走査全体の安全性を区別する
+- 並行処理コレクションでは、用途に適した原子的操作を利用する
+- 順序、読み取り・更新の頻度、反復の性質、待機の必要性を考慮して選択する
+- 格納した可変オブジェクトの変更まで自動的に同期されるわけではない
+
+**参考資料**
+
+- [Java公式API - Collections](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/util/Collections.html)
+- [Java公式API - java.util.concurrent](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/util/concurrent/package-summary.html)
+- [Java公式API - CopyOnWriteArrayList](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/util/concurrent/CopyOnWriteArrayList.html)
